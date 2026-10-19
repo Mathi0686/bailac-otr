@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+  
+  .font-mono, [data-mono="true"] {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Custom scrollbar for high-density mining data table */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* TV Mode Animations and high visibility */
+.tv-active {
+  font-size: 1.1rem;
+}
+
+.tv-active .font-mono {
+  letter-spacing: -0.02em;
+}
+
+/* Enlarge KPI numbers in TV mode */
+.tv-active .text-3xl,
+.tv-active .text-4xl {
+  font-size: 2.75rem !important;
+  line-height: 1.1;
+}
+
+/* TV Mode high visibility table */
+.tv-active table th {
+  padding-top: 0.9rem;
+  padding-bottom: 0.9rem;
+  font-size: 0.75rem;
+}
+
+.tv-active table td {
+  padding-top: 0.85rem;
+  padding-bottom: 0.85rem;
+  font-size: 0.85rem;
+}

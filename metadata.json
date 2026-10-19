@@ -1,0 +1,6 @@
+{
+  "name": "Bailac OTR - Monitoreo y Gestión Minera",
+  "description": "Plataforma corporativa de gestión y monitoreo de mantenimiento de neumáticos OTR para minería integrada con Google Sheets y Google Apps Script.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
