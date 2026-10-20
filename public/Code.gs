@@ -5,18 +5,21 @@
  * Servidor Web App para lectura ultra rápida de la planilla consolidada de
  * neumáticos OTR y entrega estructurada en formato JSON para la aplicación web.
  *
+ * PLANILLA CONSOLIDADA DE ORIGEN:
+ * https://docs.google.com/spreadsheets/d/1q_7uygfvQJW72jk2FLpOedNbo0KBnHpNn8-2B8PNCok/edit?usp=sharing
+ *
  * INSTRUCCIONES DE DESPLIEGUE:
  * 1. En tu Google Sheets con la base de datos de neumáticos OTR:
  *    Menú superior -> Extensiones -> Apps Script.
  * 2. Borra el código existente y pega este archivo completo.
- * 3. Si tu pestaña tiene un nombre específico, configúralo en HOJA_NOMBRE abajo (por defecto toma la hoja activa o la primera).
+ * 3. Si tu pestaña tiene un nombre específico, configúralo en HOJA_NOMBRE abajo (por defecto toma la primera hoja).
  * 4. Haz clic en "Implementar" (arriba a la derecha) -> "Nueva implementación".
  * 5. Tipo: Selecciona "Aplicación web".
  * 6. Configuración:
- *    - Descripción: "Bailac OTR API v1"
+ *    - Descripción: "Bailac OTR API v2 - Con Enlaces Digitales"
  *    - Ejecutar como: "Yo" (tu cuenta)
- *    - Quién tiene acceso: "Cualquier usuario" (Anyone) -> ¡Fundamental para que la app pueda leer los datos sin autenticación de Google!
- * 7. Copia la URL de la aplicación web generada (termina en /exec) y pégala en la configuración de la app Bailac OTR.
+ *    - Quién tiene acceso: "Cualquier usuario" (Anyone) -> ¡Fundamental para permitir la lectura desde la app web!
+ * 7. Copia la URL de la aplicación web generada (termina en /exec) y pégala en la Configuración de la app Bailac OTR.
  * ============================================================================
  */
 
@@ -118,12 +121,22 @@ function getOtrDataJson() {
 }
 
 /**
- * Normaliza nombres de columnas eliminando acentos, caracteres especiales y espacios
+ * Normaliza nombres de columnas eliminando acentos, caracteres especiales y espacios.
+ * Reconoce columnas estándar y nuevas columnas para enlaces de documentos digitales.
  */
 function normalizeHeader(header) {
   if (!header) return "";
   var str = String(header).trim().toUpperCase();
-  // Mapeos estándar
+
+  // 1. Columnas de Enlaces Digitales (deben evaluarse antes de las genéricas)
+  if (str.indexOf("LINK") !== -1 || str.indexOf("URL") !== -1 || str.indexOf("ENLACE") !== -1) {
+    if (str.indexOf("FAC") !== -1) return "LINK_FACTURA";
+    if (str.indexOf("OC") !== -1 || str.indexOf("COMPRA") !== -1 || str.indexOf("ORDEN") !== -1) return "LINK_OC";
+    if (str.indexOf("COT") !== -1) return "LINK_COTIZACION";
+    if (str.indexOf("REM") !== -1 || str.indexOf("SALIDA") !== -1 || str.indexOf("ENTREGA") !== -1) return "LINK_REMITO";
+  }
+
+  // 2. Mapeos estándar de columnas operativas
   if (str.indexOf("CLIENTE") !== -1) return "CLIENTE";
   if (str.indexOf("FECHA") !== -1 && str.indexOf("INGRESO") !== -1) return "FECHA_INGRESO";
   if (str.indexOf("REMITO") !== -1 && str.indexOf("INGRESO") !== -1) return "REMITO_INGRESO";
@@ -150,7 +163,7 @@ function normalizeHeader(header) {
   if (str.indexOf("FACTURA") !== -1) return "FACTURA";
   if (str.indexOf("HESS") !== -1) return "HESS";
 
-  // Reemplazo genérico
+  // Reemplazo genérico para cualquier otra columna
   return str.replace(/[^A-Z0-9_]/g, "_");
 }
 

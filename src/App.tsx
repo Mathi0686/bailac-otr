@@ -9,6 +9,7 @@ import { Header } from './components/Header';
 import { OperationsView } from './components/OperationsView';
 import { ManagementView } from './components/ManagementView';
 import { AppsScriptModal } from './components/AppsScriptModal';
+import { SettingsDrawer } from './components/SettingsDrawer';
 import { RecordDetailModal } from './components/RecordDetailModal';
 import { ToastContainer, ToastMessage } from './components/Toast';
 import { OtrRecord } from './types';
@@ -18,6 +19,7 @@ import {
   fetchFromAppsScript,
   saveStoredRecords,
   loadStoredRecords,
+  DEFAULT_APPS_SCRIPT_URL,
 } from './services/dataService';
 
 export default function App() {
@@ -34,12 +36,13 @@ export default function App() {
 
   // Modals state
   const [isAppsScriptModalOpen, setIsAppsScriptModalOpen] = useState<boolean>(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [selectedRecord, setSelectedRecord] = useState<OtrRecord | null>(null);
   const [isCreateRecordModalOpen, setIsCreateRecordModalOpen] = useState<boolean>(false);
 
-  // Custom Google Apps Script URL in localStorage
+  // Google Apps Script URL in localStorage with official default fallback
   const [appsScriptUrl, setAppsScriptUrl] = useState<string>(() => {
-    return localStorage.getItem('bailac_apps_script_url') || '';
+    return localStorage.getItem('bailac_apps_script_url') || DEFAULT_APPS_SCRIPT_URL;
   });
 
   // Data state with persistent storage support
@@ -221,6 +224,7 @@ export default function App() {
         tvMode={tvMode}
         onToggleTvMode={() => setTvMode((prev) => !prev)}
         onOpenAppsScriptModal={() => setIsAppsScriptModalOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
         onLogout={handleLogout}
         totalRecordsCount={records.length}
         lastUpdated={lastUpdated}
@@ -262,6 +266,29 @@ export default function App() {
         isCreateMode={true}
         onClose={() => setIsCreateRecordModalOpen(false)}
         onSave={handleSaveRecord}
+      />
+
+      {/* Panel de Configuración Colapsable (Ajustes de Conexión y Planilla) */}
+      <SettingsDrawer
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        currentUrl={appsScriptUrl}
+        onSaveUrl={(url) => {
+          handleSaveAppsScriptUrl(url);
+          addToast('success', 'Configuración Guardada', 'La URL de conexión ha sido actualizada.');
+        }}
+        onResetDefault={() => {
+          handleSaveAppsScriptUrl(DEFAULT_APPS_SCRIPT_URL);
+          addToast('info', 'Restablecido', 'Se restableció la URL oficial por defecto.');
+        }}
+        onRefreshData={() => loadData(false)}
+        isRefreshing={isRefreshing}
+        totalRecords={records.length}
+        lastUpdated={lastUpdated}
+        onOpenCodeModal={() => {
+          setIsSettingsOpen(false);
+          setIsAppsScriptModalOpen(true);
+        }}
       />
 
       {/* Apps Script & Deployment Guide Modal */}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { RefreshCw, Tv, Code2, LogOut, HardHat, Clock, Minimize2 } from 'lucide-react';
+import { RefreshCw, Tv, Code2, LogOut, HardHat, Clock, Minimize2, Settings } from 'lucide-react';
 
 interface HeaderProps {
   activeTab: 'operaciones' | 'gestion';
@@ -10,6 +10,7 @@ interface HeaderProps {
   tvMode: boolean;
   onToggleTvMode: () => void;
   onOpenAppsScriptModal: () => void;
+  onOpenSettings: () => void;
   onLogout: () => void;
   totalRecordsCount: number;
   lastUpdated: Date;
@@ -24,6 +25,7 @@ export const Header: React.FC<HeaderProps> = ({
   tvMode,
   onToggleTvMode,
   onOpenAppsScriptModal,
+  onOpenSettings,
   onLogout,
   totalRecordsCount,
   lastUpdated,
@@ -164,6 +166,16 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Tv className="w-3.5 h-3.5 text-orange-400 shrink-0" />
             <span className="hidden md:inline">Modo TV</span>
+          </button>
+
+          {/* Configuración (Ajustes de Conexión y Planilla) */}
+          <button
+            onClick={onOpenSettings}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition-all whitespace-nowrap shadow-sm hover:border-orange-500/50"
+            title="Abrir Panel de Configuración (Conexión Google Sheets y Apps Script)"
+          >
+            <Settings className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+            <span className="hidden sm:inline">Configuración</span>
           </button>
 
           {/* Apps Script Code Modal */}

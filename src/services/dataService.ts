@@ -1,6 +1,12 @@
 import { OtrRecord, OperationsKPIs, ManagementKPIs, FilterState } from '../types';
 import { RAW_CSV_DATA } from '../data/rawCsvData';
 
+export const DEFAULT_APPS_SCRIPT_URL =
+  'https://script.google.com/macros/s/AKfycbzttyY3RlmjL_cQIqT66grj6g-I1wu7giK8VYoOg23kh4xy_DcIEVajLBip8wnbpaHH/exec';
+
+export const DEFAULT_SPREADSHEET_URL =
+  'https://docs.google.com/spreadsheets/d/1q_7uygfvQJW72jk2FLpOedNbo0KBnHpNn8-2B8PNCok/edit?usp=sharing';
+
 // Parse monetary values like " $  6,629.42 " or "$ 2,250.00" or "-"
 export function parsePrice(val: string | number | undefined | null): number {
   if (val === undefined || val === null) return 0;
@@ -142,6 +148,12 @@ export function parseRawCsvToRecords(csvText: string): OtrRecord[] {
     const fechaFactura = getValue('FECHA_FACTURA') || getValue('FECHA FACTURA');
     const hess = getValue('HESS') || '';
 
+    // Document links
+    const linkFactura = getValue('LINK_FACTURA') || getValue('LINK FACTURA') || getValue('LINK_FAC') || '';
+    const linkOc = getValue('LINK_OC') || getValue('LINK OC') || getValue('LINK_ORDEN_COMPRA') || '';
+    const linkCotizacion = getValue('LINK_COTIZACION') || getValue('LINK COTIZACION') || getValue('LINK_COT') || '';
+    const linkRemito = getValue('LINK_REMITO') || getValue('LINK REMITO') || getValue('LINK_REMITO_SALIDA') || '';
+
     const precio = parsePrice(rawPrecio);
 
     // Calculate dates
@@ -216,6 +228,10 @@ export function parseRawCsvToRecords(csvText: string): OtrRecord[] {
       factura,
       fechaFactura,
       hess,
+      linkFactura,
+      linkOc,
+      linkCotizacion,
+      linkRemito,
       diasProceso,
       diasRetiro,
       diasAtraso,
@@ -291,11 +307,20 @@ export function filterRecords(records: OtrRecord[], filters: FilterState): OtrRe
       const match = r.trabajoRealizar.toUpperCase().includes(filters.trabajo.toUpperCase());
       if (!match) return false;
     }
-    if (filters.periodo && filters.periodo !== 'ALL') {
+
+    // Multi-select year filter support (periodos / selectedYears)
+    const activeYears = filters.periodos || filters.selectedYears;
+    if (activeYears && activeYears.length > 0 && !activeYears.includes('ALL')) {
+      const recordYear = r.periodoYear?.toString();
+      if (!recordYear || !activeYears.includes(recordYear)) {
+        return false;
+      }
+    } else if (filters.periodo && filters.periodo !== 'ALL') {
       if (r.periodoYear?.toString() !== filters.periodo) {
         return false;
       }
     }
+
     if (filters.search) {
       const q = filters.search.toLowerCase().trim();
       const matchSearch =
@@ -391,6 +416,10 @@ export function recalculateRecordMetrics(input: Partial<OtrRecord>): OtrRecord {
     factura: input.factura || '',
     fechaFactura: input.fechaFactura || '',
     hess: input.hess || '',
+    linkFactura: input.linkFactura || '',
+    linkOc: input.linkOc || '',
+    linkCotizacion: input.linkCotizacion || '',
+    linkRemito: input.linkRemito || '',
     diasProceso,
     diasRetiro,
     diasAtraso,
@@ -496,6 +525,10 @@ export async function fetchFromAppsScript(webAppUrl: string): Promise<OtrRecord[
       factura: item.FACTURA || item.factura || '',
       fechaFactura: item.FECHA_FACTURA || item.fechaFactura || '',
       hess: item.HESS || item.hess || '',
+      linkFactura: item.LINK_FACTURA || item.linkFactura || item.LINK_FAC || '',
+      linkOc: item.LINK_OC || item.linkOc || item.LINK_ORDEN_COMPRA || '',
+      linkCotizacion: item.LINK_COTIZACION || item.linkCotizacion || item.LINK_COT || '',
+      linkRemito: item.LINK_REMITO || item.linkRemito || item.LINK_REMITO_SALIDA || '',
       diasProceso,
       diasRetiro,
       diasAtraso,
@@ -510,7 +543,8 @@ export function exportToCsv(records: OtrRecord[], filename = 'bailac_otr_export.
   const headers = [
     'CLIENTE', 'FECHA INGRESO', 'REMITO INGRESO', 'MARCA', 'MEDIDA', 'SERIE',
     'SOLPED', 'NRO INTERNO', 'TRABAJO', 'ESTADO', 'FECHA COMPROMETIDA', 'FECHA TT',
-    'FECHA RETIRO', 'PRECIO USD', 'OC', 'FACTURA', 'DIAS PROCESO', 'DIAS ATRASO'
+    'FECHA RETIRO', 'PRECIO USD', 'OC', 'FACTURA', 'DIAS PROCESO', 'DIAS ATRASO',
+    'LINK FACTURA', 'LINK OC', 'LINK COTIZACION', 'LINK REMITO'
   ];
 
   const rows = records.map(r => [
@@ -531,7 +565,11 @@ export function exportToCsv(records: OtrRecord[], filename = 'bailac_otr_export.
     `"${r.oc}"`,
     `"${r.factura}"`,
     r.diasProceso ?? '',
-    r.diasAtraso ?? ''
+    r.diasAtraso ?? '',
+    `"${r.linkFactura || ''}"`,
+    `"${r.linkOc || ''}"`,
+    `"${r.linkCotizacion || ''}"`,
+    `"${r.linkRemito || ''}"`
   ]);
 
   const csvContent = [headers.join(','), ...rows.map(e => e.join(','))].join('\n');

@@ -12,6 +12,12 @@ import {
   AlertCircle,
   RotateCcw,
   Sparkles,
+  FileText,
+  Receipt,
+  FileCheck,
+  ExternalLink,
+  Link2,
+  Paperclip,
 } from 'lucide-react';
 import { OtrRecord } from '../types';
 import { recalculateRecordMetrics, formatCurrency } from '../services/dataService';
@@ -81,6 +87,10 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
         factura: '',
         fechaFactura: '',
         hess: '',
+        linkFactura: '',
+        linkOc: '',
+        linkCotizacion: '',
+        linkRemito: '',
       });
     } else if (record) {
       setIsEditing(false);
@@ -869,6 +879,187 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
                   />
                 ) : (
                   <p className="font-mono text-slate-800 text-xs">{formData.hess || '—'}</p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Section 4: Documentación Digital y Enlaces Directos */}
+          <div>
+            <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-2.5 flex items-center gap-2">
+              <Link2 className="w-3.5 h-3.5 text-orange-500" />
+              <span>4. Documentación Digital y Enlaces (Drive / ERP / Cloud)</span>
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-xl bg-slate-50 border border-slate-200">
+              {/* Link Factura */}
+              <div className="p-3 bg-white rounded-lg border border-slate-200">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10px] font-bold text-slate-700 uppercase flex items-center gap-1.5">
+                    <Receipt className="w-3.5 h-3.5 text-orange-500" />
+                    <span>Link Factura Digital</span>
+                  </label>
+                  {formData.linkFactura && formData.linkFactura.trim() && (
+                    <a
+                      href={formData.linkFactura}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[10px] font-bold text-orange-600 hover:text-orange-800 bg-orange-50 px-2 py-0.5 rounded transition-colors"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Abrir</span>
+                    </a>
+                  )}
+                </div>
+                {isEditing ? (
+                  <input
+                    type="url"
+                    value={formData.linkFactura || ''}
+                    onChange={(e) => handleFieldChange('linkFactura', e.target.value)}
+                    placeholder="https://drive.google.com/... o enlace de factura"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-900 focus:outline-none"
+                  />
+                ) : (
+                  formData.linkFactura && formData.linkFactura.trim() ? (
+                    <a
+                      href={formData.linkFactura}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-orange-600 hover:underline font-mono truncate block"
+                    >
+                      {formData.linkFactura}
+                    </a>
+                  ) : (
+                    <span className="text-xs text-slate-400 italic">Sin enlace cargado</span>
+                  )
+                )}
+              </div>
+
+              {/* Link Orden de Compra (OC) */}
+              <div className="p-3 bg-white rounded-lg border border-slate-200">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10px] font-bold text-slate-700 uppercase flex items-center gap-1.5">
+                    <FileCheck className="w-3.5 h-3.5 text-blue-500" />
+                    <span>Link Orden de Compra (O. C.)</span>
+                  </label>
+                  {formData.linkOc && formData.linkOc.trim() && (
+                    <a
+                      href={formData.linkOc}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-0.5 rounded transition-colors"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Abrir</span>
+                    </a>
+                  )}
+                </div>
+                {isEditing ? (
+                  <input
+                    type="url"
+                    value={formData.linkOc || ''}
+                    onChange={(e) => handleFieldChange('linkOc', e.target.value)}
+                    placeholder="https://drive.google.com/... o enlace de OC"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-900 focus:outline-none"
+                  />
+                ) : (
+                  formData.linkOc && formData.linkOc.trim() ? (
+                    <a
+                      href={formData.linkOc}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-blue-600 hover:underline font-mono truncate block"
+                    >
+                      {formData.linkOc}
+                    </a>
+                  ) : (
+                    <span className="text-xs text-slate-400 italic">Sin enlace cargado</span>
+                  )
+                )}
+              </div>
+
+              {/* Link Cotización */}
+              <div className="p-3 bg-white rounded-lg border border-slate-200">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10px] font-bold text-slate-700 uppercase flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>Link Cotización</span>
+                  </label>
+                  {formData.linkCotizacion && formData.linkCotizacion.trim() && (
+                    <a
+                      href={formData.linkCotizacion}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-600 hover:text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded transition-colors"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Abrir</span>
+                    </a>
+                  )}
+                </div>
+                {isEditing ? (
+                  <input
+                    type="url"
+                    value={formData.linkCotizacion || ''}
+                    onChange={(e) => handleFieldChange('linkCotizacion', e.target.value)}
+                    placeholder="https://drive.google.com/... o enlace de cotización"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-900 focus:outline-none"
+                  />
+                ) : (
+                  formData.linkCotizacion && formData.linkCotizacion.trim() ? (
+                    <a
+                      href={formData.linkCotizacion}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-emerald-600 hover:underline font-mono truncate block"
+                    >
+                      {formData.linkCotizacion}
+                    </a>
+                  ) : (
+                    <span className="text-xs text-slate-400 italic">Sin enlace cargado</span>
+                  )
+                )}
+              </div>
+
+              {/* Link Remito */}
+              <div className="p-3 bg-white rounded-lg border border-slate-200">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10px] font-bold text-slate-700 uppercase flex items-center gap-1.5">
+                    <Truck className="w-3.5 h-3.5 text-purple-500" />
+                    <span>Link Remito Salida / Entrega</span>
+                  </label>
+                  {formData.linkRemito && formData.linkRemito.trim() && (
+                    <a
+                      href={formData.linkRemito}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[10px] font-bold text-purple-600 hover:text-purple-800 bg-purple-50 px-2 py-0.5 rounded transition-colors"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Abrir</span>
+                    </a>
+                  )}
+                </div>
+                {isEditing ? (
+                  <input
+                    type="url"
+                    value={formData.linkRemito || ''}
+                    onChange={(e) => handleFieldChange('linkRemito', e.target.value)}
+                    placeholder="https://drive.google.com/... o enlace de remito"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-900 focus:outline-none"
+                  />
+                ) : (
+                  formData.linkRemito && formData.linkRemito.trim() ? (
+                    <a
+                      href={formData.linkRemito}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-purple-600 hover:underline font-mono truncate block"
+                    >
+                      {formData.linkRemito}
+                    </a>
+                  ) : (
+                    <span className="text-xs text-slate-400 italic">Sin enlace cargado</span>
+                  )
                 )}
               </div>
             </div>

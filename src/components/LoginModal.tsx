@@ -5,7 +5,7 @@ interface LoginModalProps {
   onSuccess: () => void;
 }
 
-export const PASSWORD_SECRETA = 'bailac2026';
+export const PASSWORD_SECRETA = 'Bailac27+';
 
 export const LoginModal: React.FC<LoginModalProps> = ({ onSuccess }) => {
   const [password, setPassword] = useState('');
@@ -29,11 +29,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onSuccess }) => {
         setIsSubmitting(false);
       }
     }, 250);
-  };
-
-  const handleQuickFill = () => {
-    setPassword(PASSWORD_SECRETA);
-    setError(false);
   };
 
   return (
@@ -124,22 +119,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onSuccess }) => {
             </button>
           </form>
 
-          {/* Quick-fill helper hint for convenience */}
-          <div className="mt-6 pt-5 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-            <span className="flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              <span>Clave por defecto:</span>
-            </span>
-            <button
-              type="button"
-              onClick={handleQuickFill}
-              className="font-mono font-semibold text-slate-800 hover:text-orange-600 bg-slate-100 hover:bg-orange-50 px-2 py-1 rounded transition-colors"
-              title="Haz clic para autocompletar"
-            >
-              bailac2026
-            </button>
           </div>
-        </div>
 
         {/* Footer info */}
         <div className="bg-slate-50 px-8 py-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">

@@ -4,12 +4,16 @@ import {
   CategoryScale,
   LinearScale,
   BarElement,
+  PointElement,
+  LineElement,
+  LineController,
   Title,
   Tooltip,
   Legend,
   ArcElement,
   BarController,
   DoughnutController,
+  Filler,
 } from 'chart.js';
 import {
   Clock,
@@ -34,12 +38,16 @@ ChartJS.register(
   CategoryScale,
   LinearScale,
   BarElement,
+  PointElement,
+  LineElement,
+  LineController,
   ArcElement,
   BarController,
   DoughnutController,
   Title,
   Tooltip,
-  Legend
+  Legend,
+  Filler
 );
 
 interface OperationsViewProps {
@@ -56,7 +64,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
   tvMode,
 }) => {
   // Filters
-  const [periodoFilter, setPeriodoFilter] = useState('ALL');
+  const [selectedYears, setSelectedYears] = useState<string[]>([]);
   const [clienteFilter, setClienteFilter] = useState('ALL');
   const [marcaFilter, setMarcaFilter] = useState('ALL');
   const [estadoFilter, setEstadoFilter] = useState('ALL');
@@ -109,10 +117,12 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
       marca: marcaFilter,
       estado: estadoFilter,
       trabajo: trabajoFilter,
-      periodo: periodoFilter,
+      periodo: selectedYears.length === 1 ? selectedYears[0] : 'ALL',
+      periodos: selectedYears.length > 0 ? selectedYears : undefined,
+      selectedYears: selectedYears.length > 0 ? selectedYears : undefined,
       search: tableSearchTerm,
     }),
-    [clienteFilter, marcaFilter, estadoFilter, trabajoFilter, periodoFilter, tableSearchTerm]
+    [clienteFilter, marcaFilter, estadoFilter, trabajoFilter, selectedYears, tableSearchTerm]
   );
 
   const filteredRecords = useMemo(() => filterRecords(records, filters), [records, filters]);
@@ -121,101 +131,279 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
   // Reset page when filter changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [clienteFilter, marcaFilter, estadoFilter, trabajoFilter, periodoFilter, tableSearchTerm]);
+  }, [clienteFilter, marcaFilter, estadoFilter, trabajoFilter, selectedYears, tableSearchTerm]);
 
-  // Chart Canvas Refs
-  const chartProcesoTrabajoRef = useRef<HTMLCanvasElement | null>(null);
-  const chartProcesoClienteRef = useRef<HTMLCanvasElement | null>(null);
-  const chartEstadoRef = useRef<HTMLCanvasElement | null>(null);
+  // Chart Canvas Refs (Rediseño TV de Planta)
+  const chartEvolucionMensualRef = useRef<HTMLCanvasElement | null>(null);
+  const chartTiemposTrabajoRef = useRef<HTMLCanvasElement | null>(null);
+  const chartEstadoActivoRef = useRef<HTMLCanvasElement | null>(null);
+  const chartUnidadesPlantaClienteRef = useRef<HTMLCanvasElement | null>(null);
 
-  const chartProcesoTrabajoInstance = useRef<ChartJS | null>(null);
-  const chartProcesoClienteInstance = useRef<ChartJS | null>(null);
-  const chartEstadoInstance = useRef<ChartJS | null>(null);
+  const chartEvolucionMensualInstance = useRef<ChartJS | null>(null);
+  const chartTiemposTrabajoInstance = useRef<ChartJS | null>(null);
+  const chartEstadoActivoInstance = useRef<ChartJS | null>(null);
+  const chartUnidadesPlantaClienteInstance = useRef<ChartJS | null>(null);
 
-  // Aggregations for Chart 1: Días Promedio Proceso por Trabajo
-  const trabajoChartData = useMemo(() => {
-    const map: Record<string, { totalDays: number; count: number }> = {};
+  // Month labels for 12 months
+  const MONTH_LABELS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+  const MONTH_FULL = [
+    'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+  ];
+
+  // Helper to get month index (0 to 11) from record
+  const getRecordMonthIndex = (r: OtrRecord): number | null => {
+    if (r.periodoMonth) {
+      const parts = r.periodoMonth.split('-');
+      if (parts.length === 2) {
+        const m = parseInt(parts[1], 10) - 1;
+        if (!isNaN(m) && m >= 0 && m <= 11) return m;
+      }
+    }
+    const dStr = r.fechaIngreso || r.fechaTT || r.fechaFactura;
+    if (dStr) {
+      const parts = dStr.includes('/') ? dStr.split('/') : dStr.split('-');
+      if (parts.length === 3) {
+        const m = parseInt(parts[1], 10) - 1;
+        if (!isNaN(m) && m >= 0 && m <= 11) return m;
+      }
+    }
+    return null;
+  };
+
+  // 1. Data for Gráfico Principal Superior: "Evolución Mensual de Trabajos (Ene - Dic)"
+  const evolucionMensualData = useMemo(() => {
+    const allYears = Array.from(
+      new Set(records.map((r) => r.periodoYear).filter(Boolean) as number[])
+    ).sort((a, b) => b - a);
+
+    const activeYear = allYears[0] || 2026;
+    const targetYears = selectedYears.length > 0
+      ? allYears.filter((y) => selectedYears.includes(y.toString()))
+      : allYears;
+
+    const currentYear = targetYears.includes(activeYear) ? activeYear : (targetYears[0] || activeYear);
+
+    const yearMaps: Record<number, number[]> = {};
+    targetYears.forEach((y) => {
+      yearMaps[y] = new Array(12).fill(0);
+    });
+
+    records.forEach((r) => {
+      if (clienteFilter !== 'ALL' && r.cliente !== clienteFilter) return;
+      if (marcaFilter !== 'ALL' && r.marca !== marcaFilter) return;
+      if (estadoFilter !== 'ALL' && r.estado !== estadoFilter) return;
+      if (trabajoFilter !== 'ALL' && !r.trabajoRealizar.toUpperCase().includes(trabajoFilter.toUpperCase())) return;
+      if (tableSearchTerm) {
+        const q = tableSearchTerm.toLowerCase();
+        const match =
+          r.serie.toLowerCase().includes(q) ||
+          r.nroInterno.toLowerCase().includes(q) ||
+          r.cliente.toLowerCase().includes(q) ||
+          r.remitoIngreso.toLowerCase().includes(q);
+        if (!match) return;
+      }
+
+      const y = r.periodoYear;
+      if (y && yearMaps[y]) {
+        const m = getRecordMonthIndex(r);
+        if (m !== null) {
+          yearMaps[y][m]++;
+        }
+      }
+    });
+
+    const datasets = targetYears.map((y, idx) => {
+      const isCurrent = y === currentYear;
+      if (isCurrent) {
+        return {
+          label: `${y} (Año Actual)`,
+          data: yearMaps[y],
+          borderColor: '#F97316',
+          backgroundColor: 'rgba(249, 115, 22, 0.08)',
+          borderWidth: 3.5,
+          pointRadius: 5,
+          pointHoverRadius: 8,
+          pointBackgroundColor: '#F97316',
+          pointBorderColor: '#FFFFFF',
+          pointBorderWidth: 2,
+          fill: true,
+          tension: 0.35,
+          order: 1,
+        };
+      } else {
+        const grayPalette = ['#64748B', '#94A3B8', '#CBD5E1'];
+        const grayColor = grayPalette[idx % grayPalette.length];
+        return {
+          label: `${y}`,
+          data: yearMaps[y],
+          borderColor: grayColor,
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          borderDash: [5, 5],
+          pointRadius: 3.5,
+          pointHoverRadius: 6,
+          pointBackgroundColor: grayColor,
+          pointBorderColor: '#FFFFFF',
+          pointBorderWidth: 1.5,
+          fill: false,
+          tension: 0.35,
+          order: 2 + idx,
+        };
+      }
+    });
+
+    return { labels: MONTH_LABELS, datasets, currentYear };
+  }, [records, selectedYears, clienteFilter, marcaFilter, estadoFilter, trabajoFilter, tableSearchTerm]);
+
+  // 2. Data for Gráfico Inferior 1: "Tiempos Promedio por Tipo de Trabajo" (Barras horizontales: Reparación, Recauchaje, L4/L5)
+  const tiemposTrabajoChartData = useMemo(() => {
+    const map: Record<string, { totalDays: number; count: number }> = {
+      'Reparación': { totalDays: 0, count: 0 },
+      'Recauchaje': { totalDays: 0, count: 0 },
+      'Recuperado L4': { totalDays: 0, count: 0 },
+      'Recuperado L5': { totalDays: 0, count: 0 },
+    };
+
     filteredRecords.forEach((r) => {
       if (r.diasProceso !== null && r.diasProceso >= 0) {
-        let key = 'REPARACIÓN';
-        const t = r.trabajoRealizar.toUpperCase();
-        if (t.includes('RECUPERADO L5')) key = 'RECUPERADO L5';
-        else if (t.includes('RECUPERADO L4')) key = 'RECUPERADO L4';
-        else if (t.includes('RECAUCHAJE') || t.includes('RECAPADO')) key = 'RECAUCHAJE/RECAPADO';
-        else if (t.includes('REPAR')) key = 'REPARACIÓN';
-        else if (t.includes('BAJA')) key = 'BAJA / RECHAZO';
-        else key = r.trabajoRealizar.substring(0, 18);
-
-        if (!map[key]) map[key] = { totalDays: 0, count: 0 };
-        map[key].totalDays += r.diasProceso;
-        map[key].count += 1;
+        const t = (r.trabajoRealizar || '').toUpperCase();
+        if (t.includes('L5')) {
+          map['Recuperado L5'].totalDays += r.diasProceso;
+          map['Recuperado L5'].count++;
+        } else if (t.includes('L4')) {
+          map['Recuperado L4'].totalDays += r.diasProceso;
+          map['Recuperado L4'].count++;
+        } else if (t.includes('RECAUCH') || t.includes('RECAP')) {
+          map['Recauchaje'].totalDays += r.diasProceso;
+          map['Recauchaje'].count++;
+        } else if (t.includes('REPAR')) {
+          map['Reparación'].totalDays += r.diasProceso;
+          map['Reparación'].count++;
+        }
       }
     });
 
-    const labels = Object.keys(map).slice(0, 6);
-    const data = labels.map((k) => Math.round(map[k].totalDays / map[k].count));
+    const labels = Object.keys(map).filter((k) => map[k].count > 0);
+    const data = labels.map((k) => Math.round(map[k].totalDays / Math.max(1, map[k].count)));
     return { labels, data };
   }, [filteredRecords]);
 
-  // Aggregations for Chart 2: Días Promedio Proceso por Cliente
-  const clienteChartData = useMemo(() => {
-    const map: Record<string, { totalDays: number; count: number }> = {};
+  // 3. Data for Gráfico Inferior 2: "Estado de Trabajos Activos" (Distribución En Planta, Entregados, Bajas)
+  const estadoTrabajosActivosData = useMemo(() => {
+    const counts = { PLANTA: 0, ENTREGADO: 0, BAJA: 0 };
     filteredRecords.forEach((r) => {
-      if (r.diasProceso !== null && r.diasProceso >= 0 && r.cliente) {
-        const key = r.cliente;
-        if (!map[key]) map[key] = { totalDays: 0, count: 0 };
-        map[key].totalDays += r.diasProceso;
-        map[key].count += 1;
-      }
-    });
-
-    const sortedKeys = Object.keys(map)
-      .sort((a, b) => map[b].count - map[a].count)
-      .slice(0, 6);
-
-    const labels = sortedKeys;
-    const data = labels.map((k) => Math.round(map[k].totalDays / map[k].count));
-    return { labels, data };
-  }, [filteredRecords]);
-
-  // Aggregations for Chart 3: Estado Actual de los Trabajos (Donut)
-  const estadoChartData = useMemo(() => {
-    const counts: Record<string, number> = {
-      ENTREGADO: 0,
-      PLANTA: 0,
-      BAJA: 0,
-    };
-    filteredRecords.forEach((r) => {
-      const e = r.estado.toUpperCase();
+      const e = (r.estado || '').toUpperCase();
       if (e === 'PLANTA') counts.PLANTA++;
       else if (e === 'BAJA') counts.BAJA++;
       else counts.ENTREGADO++;
     });
-
     return {
-      labels: ['Entregado', 'En Planta (Proceso)', 'Baja Operacional'],
-      data: [counts.ENTREGADO, counts.PLANTA, counts.BAJA],
-      colors: ['#0F766E', '#F97316', '#EF4444'],
+      labels: ['En Planta (Proceso)', 'Entregados', 'Bajas Operacionales'],
+      data: [counts.PLANTA, counts.ENTREGADO, counts.BAJA],
+      colors: ['#F97316', '#0F766E', '#EF4444'],
+      counts,
+    };
+  }, [filteredRecords]);
+
+  // 4. Data for Gráfico Inferior 3: "Unidades en Planta por Cliente / Faena" (Barras horizontales ordenadas por volumen)
+  const unidadesPlantaPorClienteData = useMemo(() => {
+    const map: Record<string, number> = {};
+    filteredRecords.forEach((r) => {
+      const e = (r.estado || '').toUpperCase();
+      if (e === 'PLANTA' && r.cliente) {
+        map[r.cliente] = (map[r.cliente] || 0) + 1;
+      }
+    });
+
+    const sorted = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 7);
+    const labels = sorted.map(([k]) => k);
+    const data = sorted.map(([, v]) => v);
+    return {
+      labels,
+      data,
+      totalEnPlanta: Object.values(map).reduce((a, b) => a + b, 0),
     };
   }, [filteredRecords]);
 
   // Initialize and update Chart.js instances
   useEffect(() => {
-    if (chartProcesoTrabajoRef.current) {
-      if (chartProcesoTrabajoInstance.current) {
-        chartProcesoTrabajoInstance.current.destroy();
-      }
-      chartProcesoTrabajoInstance.current = new ChartJS(chartProcesoTrabajoRef.current, {
+    // 1. Gráfico Superior: Evolución Mensual de Trabajos (Line Chart)
+    if (chartEvolucionMensualRef.current) {
+      chartEvolucionMensualInstance.current?.destroy();
+      chartEvolucionMensualInstance.current = new ChartJS(chartEvolucionMensualRef.current, {
+        type: 'line',
+        data: {
+          labels: evolucionMensualData.labels,
+          datasets: evolucionMensualData.datasets,
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false,
+          },
+          plugins: {
+            legend: {
+              position: 'top',
+              align: 'end',
+              labels: {
+                boxWidth: 12,
+                boxHeight: 3,
+                usePointStyle: false,
+                font: { family: 'Plus Jakarta Sans', size: 11, weight: 'bold' },
+                padding: 14,
+              },
+            },
+            tooltip: {
+              callbacks: {
+                title: (items) => {
+                  const idx = items[0]?.dataIndex ?? 0;
+                  return `${MONTH_FULL[idx] || ''} - Trabajos Procesados`;
+                },
+                label: (ctx) => ` ${ctx.dataset.label}: ${ctx.parsed.y} neumáticos`,
+              },
+            },
+          },
+          scales: {
+            x: {
+              grid: { color: '#f1f5f9' },
+              ticks: { font: { family: 'Plus Jakarta Sans', size: 11, weight: 'bold' } },
+            },
+            y: {
+              beginAtZero: true,
+              grid: { color: '#f1f5f9' },
+              ticks: {
+                precision: 0,
+                font: { family: 'Plus Jakarta Sans', size: 10 },
+              },
+              title: {
+                display: true,
+                text: 'Cantidad de Trabajos',
+                font: { family: 'Plus Jakarta Sans', size: 11, weight: 'bold' },
+                color: '#64748B',
+              },
+            },
+          },
+        },
+      });
+    }
+
+    // 2. Gráfico Inferior 1: Tiempos Promedio por Tipo de Trabajo (Horizontal Bar)
+    if (chartTiemposTrabajoRef.current) {
+      chartTiemposTrabajoInstance.current?.destroy();
+      chartTiemposTrabajoInstance.current = new ChartJS(chartTiemposTrabajoRef.current, {
         type: 'bar',
         data: {
-          labels: trabajoChartData.labels,
+          labels: tiemposTrabajoChartData.labels,
           datasets: [
             {
               label: 'Días Promedio',
-              data: trabajoChartData.data,
+              data: tiemposTrabajoChartData.data,
               backgroundColor: '#F97316',
               borderRadius: 6,
-              barThickness: 16,
+              barThickness: 18,
             },
           ],
         },
@@ -227,7 +415,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
             legend: { display: false },
             tooltip: {
               callbacks: {
-                label: (ctx) => ` ${ctx.parsed.x} días de proceso`,
+                label: (ctx) => ` ${ctx.parsed.x} días promedio de proceso`,
               },
             },
           },
@@ -235,7 +423,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
             x: {
               grid: { color: '#f1f5f9' },
               ticks: { font: { family: 'Plus Jakarta Sans', size: 10 } },
-              title: { display: true, text: 'Días', font: { size: 10 } },
+              title: { display: true, text: 'Días de Proceso', font: { size: 10 } },
             },
             y: {
               grid: { display: false },
@@ -246,62 +434,17 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
       });
     }
 
-    if (chartProcesoClienteRef.current) {
-      if (chartProcesoClienteInstance.current) {
-        chartProcesoClienteInstance.current.destroy();
-      }
-      chartProcesoClienteInstance.current = new ChartJS(chartProcesoClienteRef.current, {
-        type: 'bar',
-        data: {
-          labels: clienteChartData.labels,
-          datasets: [
-            {
-              label: 'Días Promedio',
-              data: clienteChartData.data,
-              backgroundColor: '#0F172A',
-              borderRadius: 6,
-              barThickness: 16,
-            },
-          ],
-        },
-        options: {
-          indexAxis: 'y',
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { display: false },
-            tooltip: {
-              callbacks: {
-                label: (ctx) => ` ${ctx.parsed.x} días promedio`,
-              },
-            },
-          },
-          scales: {
-            x: {
-              grid: { color: '#f1f5f9' },
-              ticks: { font: { family: 'Plus Jakarta Sans', size: 10 } },
-            },
-            y: {
-              grid: { display: false },
-              ticks: { font: { family: 'Plus Jakarta Sans', size: 11, weight: 'bold' } },
-            },
-          },
-        },
-      });
-    }
-
-    if (chartEstadoRef.current) {
-      if (chartEstadoInstance.current) {
-        chartEstadoInstance.current.destroy();
-      }
-      chartEstadoInstance.current = new ChartJS(chartEstadoRef.current, {
+    // 3. Gráfico Inferior 2: Estado de Trabajos Activos (Doughnut)
+    if (chartEstadoActivoRef.current) {
+      chartEstadoActivoInstance.current?.destroy();
+      chartEstadoActivoInstance.current = new ChartJS(chartEstadoActivoRef.current, {
         type: 'doughnut',
         data: {
-          labels: estadoChartData.labels,
+          labels: estadoTrabajosActivosData.labels,
           datasets: [
             {
-              data: estadoChartData.data,
-              backgroundColor: estadoChartData.colors,
+              data: estadoTrabajosActivosData.data,
+              backgroundColor: estadoTrabajosActivosData.colors,
               borderWidth: 2,
               borderColor: '#ffffff',
             },
@@ -316,7 +459,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
               position: 'bottom',
               labels: {
                 boxWidth: 10,
-                padding: 12,
+                padding: 10,
                 font: { family: 'Plus Jakarta Sans', size: 11 },
               },
             },
@@ -330,12 +473,58 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
       });
     }
 
+    // 4. Gráfico Inferior 3: Unidades en Planta por Cliente / Faena (Horizontal Bar)
+    if (chartUnidadesPlantaClienteRef.current) {
+      chartUnidadesPlantaClienteInstance.current?.destroy();
+      chartUnidadesPlantaClienteInstance.current = new ChartJS(chartUnidadesPlantaClienteRef.current, {
+        type: 'bar',
+        data: {
+          labels: unidadesPlantaPorClienteData.labels,
+          datasets: [
+            {
+              label: 'Unidades en Planta',
+              data: unidadesPlantaPorClienteData.data,
+              backgroundColor: '#0F172A',
+              borderRadius: 6,
+              barThickness: 16,
+            },
+          ],
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => ` ${ctx.parsed.x} neumáticos en planta`,
+              },
+            },
+          },
+          scales: {
+            x: {
+              beginAtZero: true,
+              grid: { color: '#f1f5f9' },
+              ticks: { precision: 0, font: { family: 'Plus Jakarta Sans', size: 10 } },
+              title: { display: true, text: 'Unidades en Taller', font: { size: 10 } },
+            },
+            y: {
+              grid: { display: false },
+              ticks: { font: { family: 'Plus Jakarta Sans', size: 11, weight: 'bold' } },
+            },
+          },
+        },
+      });
+    }
+
     return () => {
-      chartProcesoTrabajoInstance.current?.destroy();
-      chartProcesoClienteInstance.current?.destroy();
-      chartEstadoInstance.current?.destroy();
+      chartEvolucionMensualInstance.current?.destroy();
+      chartTiemposTrabajoInstance.current?.destroy();
+      chartEstadoActivoInstance.current?.destroy();
+      chartUnidadesPlantaClienteInstance.current?.destroy();
     };
-  }, [trabajoChartData, clienteChartData, estadoChartData]);
+  }, [evolucionMensualData, tiemposTrabajoChartData, estadoTrabajosActivosData, unidadesPlantaPorClienteData]);
 
   // Pagination for high density table
   const totalPages = Math.max(1, Math.ceil(filteredRecords.length / pageSize));
@@ -355,20 +544,43 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
               <span>Filtros Operativos:</span>
             </span>
 
-            {/* Filtro de Tiempo en Años */}
-            <div className="flex items-center gap-1">
-              <select
-                value={periodoFilter}
-                onChange={(e) => setPeriodoFilter(e.target.value)}
-                className="text-xs font-semibold px-3 py-1.5 bg-orange-50/70 border border-orange-200 rounded-lg text-orange-950 focus:outline-none focus:ring-2 focus:ring-orange-500 font-mono"
+            {/* Filtro Multi-Selección de Años */}
+            <div className="flex items-center gap-1.5 flex-wrap p-1 bg-slate-50 border border-slate-200 rounded-lg">
+              <span className="text-[10px] font-bold text-slate-500 uppercase px-1.5">Años:</span>
+              <button
+                type="button"
+                onClick={() => setSelectedYears([])}
+                className={`px-2 py-0.5 text-xs font-bold rounded-md transition-all ${
+                  selectedYears.length === 0
+                    ? 'bg-orange-500 text-slate-950 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                }`}
               >
-                <option value="ALL">Todos los Años ({periodosList.length})</option>
-                {periodosList.map((p) => (
-                  <option key={p} value={p}>
-                    Año {p}
-                  </option>
-                ))}
-              </select>
+                Todos
+              </button>
+              {periodosList.map((p) => {
+                const isSelected = selectedYears.includes(p);
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => {
+                      setSelectedYears((prev) =>
+                        prev.includes(p) ? prev.filter((y) => y !== p) : [...prev, p]
+                      );
+                    }}
+                    className={`px-2 py-0.5 text-xs font-bold font-mono rounded-md transition-all ${
+                      isSelected
+                        ? 'bg-slate-900 text-white shadow-xs ring-1 ring-orange-500'
+                        : 'text-slate-700 bg-white hover:bg-slate-100 border border-slate-200/80'
+                    }`}
+                    title={`Filtrar por año ${p} (haz clic para alternar)`}
+                  >
+                    {p}
+                    {isSelected && <span className="ml-1 text-orange-400 font-bold">✓</span>}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Cliente Dropdown */}
@@ -428,7 +640,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
 
           {/* Action Controls: Add Record & Export */}
           <div className="flex items-center gap-2">
-            {(periodoFilter !== 'ALL' ||
+            {(selectedYears.length > 0 ||
               clienteFilter !== 'ALL' ||
               marcaFilter !== 'ALL' ||
               estadoFilter !== 'ALL' ||
@@ -436,7 +648,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
               tableSearchTerm) && (
               <button
                 onClick={() => {
-                  setPeriodoFilter('ALL');
+                  setSelectedYears([]);
                   setClienteFilter('ALL');
                   setMarcaFilter('ALL');
                   setEstadoFilter('ALL');
@@ -559,47 +771,80 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
         </div>
       </div>
 
-      {/* 3 Gráficos Operativos (Chart.js) */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Gráfico 1: Días Promedio Proceso por Trabajo Realizado */}
-        <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-orange-500" />
-              <span>Días Proceso por Trabajo Realizado</span>
-            </h3>
-            <span className="text-[11px] text-slate-400">Promedio</span>
+      {/* SECCIÓN DE GRÁFICOS OPERATIVOS (REDISEÑO PARA TV DE PLANTA) */}
+      <div className="space-y-5">
+        {/* Gráfico Principal Superior (Ocupa todo el ancho): Evolución Mensual de Trabajos (Ene - Dic) */}
+        <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col w-full">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-orange-500" />
+                <span>Evolución Mensual de Trabajos (Ene - Dic)</span>
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Comparativa año a año de neumáticos y trabajos procesados por mes (Línea naranja {evolucionMensualData.currentYear} vs. años anteriores)
+              </p>
+            </div>
+            <div className="flex items-center gap-2 text-xs font-semibold">
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-orange-50 text-orange-700 border border-orange-200">
+                <span className="w-3 h-1 bg-orange-500 rounded-full inline-block"></span>
+                <span>Año {evolucionMensualData.currentYear} (Activo)</span>
+              </span>
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-50 text-slate-600 border border-slate-200">
+                <span className="w-3 h-0.5 border-t border-dashed border-slate-400 inline-block"></span>
+                <span>Años Anteriores</span>
+              </span>
+            </div>
           </div>
-          <div className="relative h-64 w-full">
-            <canvas ref={chartProcesoTrabajoRef} />
+          <div className="relative h-64 sm:h-72 w-full">
+            <canvas ref={chartEvolucionMensualRef} />
           </div>
         </div>
 
-        {/* Gráfico 2: Días Promedio Proceso por Cliente */}
-        <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-slate-900" />
-              <span>Días Proceso por Cliente</span>
-            </h3>
-            <span className="text-[11px] text-slate-400">Top Clientes</span>
+        {/* Gráficos Inferiores (3 Columnas Amplias y Legibles) */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {/* 1. "Tiempos Promedio por Tipo de Trabajo" (Barras horizontales: Reparación, Recauchaje, L4/L5) */}
+          <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-orange-500" />
+                <span>Tiempos Promedio por Tipo de Trabajo</span>
+              </h3>
+              <span className="text-[11px] text-slate-400 font-mono">Días Proceso</span>
+            </div>
+            <div className="relative h-60 w-full">
+              <canvas ref={chartTiemposTrabajoRef} />
+            </div>
           </div>
-          <div className="relative h-64 w-full">
-            <canvas ref={chartProcesoClienteRef} />
-          </div>
-        </div>
 
-        {/* Gráfico 3: Estado Actual de los Trabajos (Dona) */}
-        <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
-              <Layers className="w-4 h-4 text-orange-500" />
-              <span>Estado Actual de los Trabajos</span>
-            </h3>
-            <span className="text-[11px] text-slate-400">{filteredRecords.length} unid.</span>
+          {/* 2. "Estado de Trabajos Activos" (Visualizador claro de distribución entre En Planta, Entregados y Bajas) */}
+          <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-orange-500" />
+                <span>Estado de Trabajos Activos</span>
+              </h3>
+              <span className="text-[11px] text-slate-400 font-mono">{filteredRecords.length} unid.</span>
+            </div>
+            <div className="relative h-60 w-full">
+              <canvas ref={chartEstadoActivoRef} />
+            </div>
           </div>
-          <div className="relative h-64 w-full">
-            <canvas ref={chartEstadoRef} />
+
+          {/* 3. "Unidades en Planta por Cliente / Faena" (Barras horizontales ordenadas por volumen) */}
+          <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                <Truck className="w-4 h-4 text-slate-900" />
+                <span>Unidades en Planta por Cliente / Faena</span>
+              </h3>
+              <span className="text-[11px] font-bold text-orange-600 bg-orange-50 px-2 py-0.5 rounded border border-orange-200">
+                {unidadesPlantaPorClienteData.totalEnPlanta} en taller
+              </span>
+            </div>
+            <div className="relative h-60 w-full">
+              <canvas ref={chartUnidadesPlantaClienteRef} />
+            </div>
           </div>
         </div>
       </div>
@@ -616,7 +861,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Haz clic en cualquier fila para ver el detalle, modificar datos o historial completo
+              Haz clic en cualquier fila para ver el detalle, modificar datos o abrir documentos adjuntos
             </p>
           </div>
 
@@ -684,13 +929,14 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                 <th className="py-3 px-3 text-right whitespace-nowrap">Días Atr.</th>
                 <th className="py-3 px-3 text-center whitespace-nowrap">F. Ingreso</th>
                 <th className="py-3 px-3 text-center whitespace-nowrap">F. TT</th>
+                <th className="py-3 px-3 text-center whitespace-nowrap">Docs</th>
                 <th className="py-3 px-3 text-center whitespace-nowrap">Acción</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {paginatedRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="py-12 text-center text-slate-400">
+                  <td colSpan={13} className="py-12 text-center text-slate-400">
                     No se encontraron neumáticos con los criterios de búsqueda actuales.
                   </td>
                 </tr>
@@ -747,6 +993,61 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                     </td>
                     <td className="py-2.5 px-3 font-mono text-center text-slate-800 font-semibold whitespace-nowrap">
                       {r.fechaTT || '—'}
+                    </td>
+                    {/* Document Links Column */}
+                    <td
+                      className="py-2.5 px-3 text-center whitespace-nowrap"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex items-center justify-center gap-1">
+                        {r.linkFactura ? (
+                          <a
+                            href={r.linkFactura}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-orange-100 text-orange-800 hover:bg-orange-200 transition-colors shadow-2xs"
+                            title="Abrir Factura Digital"
+                          >
+                            FAC
+                          </a>
+                        ) : null}
+                        {r.linkOc ? (
+                          <a
+                            href={r.linkOc}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-800 hover:bg-blue-200 transition-colors shadow-2xs"
+                            title="Abrir Orden de Compra (OC)"
+                          >
+                            OC
+                          </a>
+                        ) : null}
+                        {r.linkCotizacion ? (
+                          <a
+                            href={r.linkCotizacion}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 hover:bg-emerald-200 transition-colors shadow-2xs"
+                            title="Abrir Cotización"
+                          >
+                            COT
+                          </a>
+                        ) : null}
+                        {r.linkRemito ? (
+                          <a
+                            href={r.linkRemito}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-100 text-purple-800 hover:bg-purple-200 transition-colors shadow-2xs"
+                            title="Abrir Remito"
+                          >
+                            REM
+                          </a>
+                        ) : null}
+                        {!r.linkFactura && !r.linkOc && !r.linkCotizacion && !r.linkRemito && (
+                          <span className="text-slate-300 text-[11px]">—</span>
+                        )}
+                      </div>
                     </td>
                     <td className="py-2.5 px-3 text-center whitespace-nowrap">
                       <button

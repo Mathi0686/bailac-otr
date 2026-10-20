@@ -26,6 +26,11 @@ export interface OtrRecord {
   factura: string;
   fechaFactura: string;
   hess: string;
+  // Digital document links
+  linkFactura?: string;
+  linkOc?: string;
+  linkCotizacion?: string;
+  linkRemito?: string;
   // Calculated metric fields
   diasProceso: number | null;
   diasRetiro: number | null;
@@ -56,6 +61,8 @@ export interface FilterState {
   marca: string;
   estado: string;
   trabajo: string;
-  periodo: string; // 'all' | '2026' | '2025' | '2024' etc.
+  periodo: string; // backwards compatibility
+  periodos?: string[]; // multi-select year filter, e.g. ['2025', '2026']
+  selectedYears?: string[]; // alias for multi-select year filter
   search: string;
 }

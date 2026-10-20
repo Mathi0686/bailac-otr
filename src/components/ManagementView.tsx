@@ -4,12 +4,16 @@ import {
   CategoryScale,
   LinearScale,
   BarElement,
+  PointElement,
+  LineElement,
+  LineController,
   Title,
   Tooltip,
   Legend,
   ArcElement,
   BarController,
   DoughnutController,
+  Filler,
 } from 'chart.js';
 import {
   DollarSign,
@@ -23,6 +27,7 @@ import {
   Building2,
   Briefcase,
   PlusCircle,
+  TrendingUp,
 } from 'lucide-react';
 import { OtrRecord, FilterState } from '../types';
 import { calculateManagementKPIs, filterRecords, formatCurrency, exportToCsv } from '../services/dataService';
@@ -31,12 +36,16 @@ ChartJS.register(
   CategoryScale,
   LinearScale,
   BarElement,
+  PointElement,
+  LineElement,
+  LineController,
   ArcElement,
   BarController,
   DoughnutController,
   Title,
   Tooltip,
-  Legend
+  Legend,
+  Filler
 );
 
 interface ManagementViewProps {
@@ -53,7 +62,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   tvMode,
 }) => {
   // Filters
-  const [periodoFilter, setPeriodoFilter] = useState('ALL');
+  const [selectedYears, setSelectedYears] = useState<string[]>([]);
   const [clienteFilter, setClienteFilter] = useState('ALL');
   const [marcaFilter, setMarcaFilter] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
@@ -86,43 +95,155 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       marca: marcaFilter,
       estado: 'ALL',
       trabajo: 'ALL',
-      periodo: periodoFilter,
+      periodo: selectedYears.length === 1 ? selectedYears[0] : 'ALL',
+      periodos: selectedYears.length > 0 ? selectedYears : undefined,
+      selectedYears: selectedYears.length > 0 ? selectedYears : undefined,
       search: searchTerm,
     }),
-    [clienteFilter, marcaFilter, periodoFilter, searchTerm]
+    [clienteFilter, marcaFilter, selectedYears, searchTerm]
   );
 
   const filteredRecords = useMemo(() => filterRecords(records, filters), [records, filters]);
   const kpis = useMemo(() => calculateManagementKPIs(filteredRecords), [filteredRecords]);
 
-  // Chart Canvas Refs
-  const chartFacturacionPeriodoRef = useRef<HTMLCanvasElement | null>(null);
+  // Chart Canvas Refs (Rediseño Gerencial)
+  const chartEvolucionFacturacionRef = useRef<HTMLCanvasElement | null>(null);
+  const chartTopClientesRef = useRef<HTMLCanvasElement | null>(null);
   const chartFacturacionMarcaRef = useRef<HTMLCanvasElement | null>(null);
-  const chartFacturacionClienteRef = useRef<HTMLCanvasElement | null>(null);
-  const chartNeumaticosEstadoRef = useRef<HTMLCanvasElement | null>(null);
 
-  const chartFacturacionPeriodoInst = useRef<ChartJS | null>(null);
+  const chartEvolucionFacturacionInst = useRef<ChartJS | null>(null);
+  const chartTopClientesInst = useRef<ChartJS | null>(null);
   const chartFacturacionMarcaInst = useRef<ChartJS | null>(null);
-  const chartFacturacionClienteInst = useRef<ChartJS | null>(null);
-  const chartNeumaticosEstadoInst = useRef<ChartJS | null>(null);
 
-  // Aggregation 1: Facturación por Período
-  const periodoChartData = useMemo(() => {
-    const map: Record<string, number> = {};
-    filteredRecords.forEach((r) => {
-      if (r.precio > 0) {
-        const yearKey = r.periodoYear ? r.periodoYear.toString() : 'Otros';
-        map[yearKey] = (map[yearKey] || 0) + r.precio;
+  // Month labels for 12 months
+  const MONTH_LABELS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+  const MONTH_FULL = [
+    'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+  ];
+
+  // Helper to extract month index (0 to 11) from record
+  const getRecordMonthIndex = (r: OtrRecord): number | null => {
+    if (r.periodoMonth) {
+      const parts = r.periodoMonth.split('-');
+      if (parts.length === 2) {
+        const m = parseInt(parts[1], 10) - 1;
+        if (!isNaN(m) && m >= 0 && m <= 11) return m;
+      }
+    }
+    const dStr = r.fechaFactura || r.fechaTT || r.fechaIngreso;
+    if (dStr) {
+      const parts = dStr.includes('/') ? dStr.split('/') : dStr.split('-');
+      if (parts.length === 3) {
+        const m = parseInt(parts[1], 10) - 1;
+        if (!isNaN(m) && m >= 0 && m <= 11) return m;
+      }
+    }
+    return null;
+  };
+
+  // 1. Data for Gráfico Principal Superior: "Evolución Mensual de Facturación ($ USD/ARS)"
+  const evolucionFacturacionData = useMemo(() => {
+    const allYears = Array.from(
+      new Set(records.map((r) => r.periodoYear).filter(Boolean) as number[])
+    ).sort((a, b) => b - a);
+
+    const activeYear = allYears[0] || 2026;
+    const targetYears = selectedYears.length > 0
+      ? allYears.filter((y) => selectedYears.includes(y.toString()))
+      : allYears;
+
+    const currentYear = targetYears.includes(activeYear) ? activeYear : (targetYears[0] || activeYear);
+
+    const yearMaps: Record<number, number[]> = {};
+    targetYears.forEach((y) => {
+      yearMaps[y] = new Array(12).fill(0);
+    });
+
+    records.forEach((r) => {
+      if (r.precio <= 0) return;
+      if (clienteFilter !== 'ALL' && r.cliente !== clienteFilter) return;
+      if (marcaFilter !== 'ALL' && r.marca !== marcaFilter) return;
+      if (searchTerm) {
+        const q = searchTerm.toLowerCase();
+        const match =
+          r.cliente.toLowerCase().includes(q) ||
+          r.nCotizacion.toLowerCase().includes(q) ||
+          r.oc.toLowerCase().includes(q) ||
+          r.factura.toLowerCase().includes(q) ||
+          r.serie.toLowerCase().includes(q);
+        if (!match) return;
+      }
+
+      const y = r.periodoYear;
+      if (y && yearMaps[y]) {
+        const m = getRecordMonthIndex(r);
+        if (m !== null) {
+          yearMaps[y][m] += r.precio;
+        }
       }
     });
 
-    const labels = Object.keys(map).sort();
-    const data = labels.map((k) => Math.round(map[k]));
+    const datasets = targetYears.map((y, idx) => {
+      const isCurrent = y === currentYear;
+      if (isCurrent) {
+        return {
+          label: `${y} (Año Actual)`,
+          data: yearMaps[y].map((v) => Math.round(v)),
+          borderColor: '#F97316',
+          backgroundColor: 'rgba(249, 115, 22, 0.08)',
+          borderWidth: 3.5,
+          pointRadius: 5,
+          pointHoverRadius: 8,
+          pointBackgroundColor: '#F97316',
+          pointBorderColor: '#FFFFFF',
+          pointBorderWidth: 2,
+          fill: true,
+          tension: 0.35,
+          order: 1,
+        };
+      } else {
+        const grayPalette = ['#64748B', '#94A3B8', '#CBD5E1'];
+        const grayColor = grayPalette[idx % grayPalette.length];
+        return {
+          label: `${y} (YoY)`,
+          data: yearMaps[y].map((v) => Math.round(v)),
+          borderColor: grayColor,
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          borderDash: [5, 5],
+          pointRadius: 3.5,
+          pointHoverRadius: 6,
+          pointBackgroundColor: grayColor,
+          pointBorderColor: '#FFFFFF',
+          pointBorderWidth: 1.5,
+          fill: false,
+          tension: 0.35,
+          order: 2 + idx,
+        };
+      }
+    });
+
+    return { labels: MONTH_LABELS, datasets, currentYear };
+  }, [records, selectedYears, clienteFilter, marcaFilter, searchTerm]);
+
+  // 2. Data for Gráfico Inferior 1: "Top Clientes por Facturación" (Barras horizontales descendentes)
+  const topClientesChartData = useMemo(() => {
+    const map: Record<string, number> = {};
+    filteredRecords.forEach((r) => {
+      if (r.precio > 0 && r.cliente) {
+        map[r.cliente] = (map[r.cliente] || 0) + r.precio;
+      }
+    });
+
+    const sorted = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    const labels = sorted.map(([k]) => k);
+    const data = sorted.map(([, v]) => Math.round(v));
     return { labels, data };
   }, [filteredRecords]);
 
-  // Aggregation 2: Facturación por Marca
-  const marcaChartData = useMemo(() => {
+  // 3. Data for Gráfico Inferior 2: "Facturación por Marca" (Barras reemplazando la dona)
+  const facturacionMarcaChartData = useMemo(() => {
     const map: Record<string, number> = {};
     filteredRecords.forEach((r) => {
       if (r.precio > 0) {
@@ -131,116 +252,70 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       }
     });
 
-    const sorted = Object.entries(map).sort((a, b) => b[1] - a[1]);
+    const sorted = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 8);
     const labels = sorted.map(([k]) => k);
     const data = sorted.map(([, v]) => Math.round(v));
-    const colors = ['#0F172A', '#F97316', '#EAB308', '#0F766E', '#64748B', '#94A3B8'];
-
+    const colors = ['#0F172A', '#1E293B', '#334155', '#475569', '#64748B', '#0F766E', '#F97316', '#EAB308'];
     return { labels, data, colors: colors.slice(0, labels.length) };
   }, [filteredRecords]);
 
-  // Aggregation 3: Facturación por Cliente
-  const clienteChartData = useMemo(() => {
-    const map: Record<string, number> = {};
-    filteredRecords.forEach((r) => {
-      if (r.precio > 0 && r.cliente) {
-        map[r.cliente] = (map[r.cliente] || 0) + r.precio;
-      }
-    });
-
-    const sorted = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 6);
-    const labels = sorted.map(([k]) => k);
-    const data = sorted.map(([, v]) => Math.round(v));
-    return { labels, data };
-  }, [filteredRecords]);
-
-  // Aggregation 4: Neumáticos por Estado
-  const estadoChartData = useMemo(() => {
-    return {
-      labels: ['Entregados', 'Pendientes (Planta)', 'Baja'],
-      data: [kpis.entregados, kpis.pendientes, kpis.bajas],
-      colors: ['#0F766E', '#F97316', '#EF4444'],
-    };
-  }, [kpis]);
-
   // Initialize and update Chart.js instances
   useEffect(() => {
-    // 1. Facturación por Período
-    if (chartFacturacionPeriodoRef.current) {
-      chartFacturacionPeriodoInst.current?.destroy();
-      chartFacturacionPeriodoInst.current = new ChartJS(chartFacturacionPeriodoRef.current, {
-        type: 'bar',
+    // 1. Gráfico Superior: Evolución Mensual de Facturación ($ USD/ARS) - Line Chart
+    if (chartEvolucionFacturacionRef.current) {
+      chartEvolucionFacturacionInst.current?.destroy();
+      chartEvolucionFacturacionInst.current = new ChartJS(chartEvolucionFacturacionRef.current, {
+        type: 'line',
         data: {
-          labels: periodoChartData.labels,
-          datasets: [
-            {
-              label: 'Facturación USD',
-              data: periodoChartData.data,
-              backgroundColor: '#0F172A',
-              borderRadius: 6,
-            },
-          ],
+          labels: evolucionFacturacionData.labels,
+          datasets: evolucionFacturacionData.datasets,
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
+          interaction: {
+            mode: 'index',
+            intersect: false,
+          },
           plugins: {
-            legend: { display: false },
+            legend: {
+              position: 'top',
+              align: 'end',
+              labels: {
+                boxWidth: 12,
+                boxHeight: 3,
+                usePointStyle: false,
+                font: { family: 'Plus Jakarta Sans', size: 11, weight: 'bold' },
+                padding: 14,
+              },
+            },
             tooltip: {
               callbacks: {
-                label: (ctx) => ` ${formatCurrency(Number(ctx.parsed.y ?? 0))}`,
+                title: (items) => {
+                  const idx = items[0]?.dataIndex ?? 0;
+                  return `${MONTH_FULL[idx] || ''} - Facturación Registrada`;
+                },
+                label: (ctx) => ` ${ctx.dataset.label}: ${formatCurrency(Number(ctx.parsed.y ?? 0))}`,
               },
             },
           },
           scales: {
-            y: {
-              ticks: {
-                callback: (val) => `$${Number(val) / 1000}k`,
-                font: { family: 'Plus Jakarta Sans', size: 10 },
-              },
-              grid: { color: '#f1f5f9' },
-            },
             x: {
-              grid: { display: false },
+              grid: { color: '#f1f5f9' },
               ticks: { font: { family: 'Plus Jakarta Sans', size: 11, weight: 'bold' } },
             },
-          },
-        },
-      });
-    }
-
-    // 2. Facturación por Marca (Donut)
-    if (chartFacturacionMarcaRef.current) {
-      chartFacturacionMarcaInst.current?.destroy();
-      chartFacturacionMarcaInst.current = new ChartJS(chartFacturacionMarcaRef.current, {
-        type: 'doughnut',
-        data: {
-          labels: marcaChartData.labels,
-          datasets: [
-            {
-              data: marcaChartData.data,
-              backgroundColor: marcaChartData.colors,
-              borderWidth: 2,
-              borderColor: '#ffffff',
-            },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          cutout: '66%',
-          plugins: {
-            legend: {
-              position: 'bottom',
-              labels: {
-                boxWidth: 10,
-                padding: 10,
-                font: { family: 'Plus Jakarta Sans', size: 11 },
+            y: {
+              beginAtZero: true,
+              grid: { color: '#f1f5f9' },
+              ticks: {
+                callback: (val) => `$${(Number(val) / 1000).toLocaleString()}k`,
+                font: { family: 'Plus Jakarta Sans', size: 10 },
               },
-            },
-            tooltip: {
-              callbacks: {
-                label: (ctx) => ` ${ctx.label}: ${formatCurrency(Number(ctx.raw))}`,
+              title: {
+                display: true,
+                text: 'Facturación ($)',
+                font: { family: 'Plus Jakarta Sans', size: 11, weight: 'bold' },
+                color: '#64748B',
               },
             },
           },
@@ -248,17 +323,17 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       });
     }
 
-    // 3. Facturación por Cliente (Horizontal Bar)
-    if (chartFacturacionClienteRef.current) {
-      chartFacturacionClienteInst.current?.destroy();
-      chartFacturacionClienteInst.current = new ChartJS(chartFacturacionClienteRef.current, {
+    // 2. Gráfico Inferior 1: Top Clientes por Facturación (Horizontal Bar descendente)
+    if (chartTopClientesRef.current) {
+      chartTopClientesInst.current?.destroy();
+      chartTopClientesInst.current = new ChartJS(chartTopClientesRef.current, {
         type: 'bar',
         data: {
-          labels: clienteChartData.labels,
+          labels: topClientesChartData.labels,
           datasets: [
             {
-              label: 'Facturación USD',
-              data: clienteChartData.data,
+              label: 'Facturación Total',
+              data: topClientesChartData.data,
               backgroundColor: '#F97316',
               borderRadius: 6,
               barThickness: 16,
@@ -279,11 +354,12 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           },
           scales: {
             x: {
+              grid: { color: '#f1f5f9' },
               ticks: {
-                callback: (val) => `$${Number(val) / 1000}k`,
+                callback: (val) => `$${(Number(val) / 1000).toLocaleString()}k`,
                 font: { family: 'Plus Jakarta Sans', size: 10 },
               },
-              grid: { color: '#f1f5f9' },
+              title: { display: true, text: 'Total Facturado ($)', font: { size: 10 } },
             },
             y: {
               grid: { display: false },
@@ -294,39 +370,47 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       });
     }
 
-    // 4. Neumáticos por Estado (Donut)
-    if (chartNeumaticosEstadoRef.current) {
-      chartNeumaticosEstadoInst.current?.destroy();
-      chartNeumaticosEstadoInst.current = new ChartJS(chartNeumaticosEstadoRef.current, {
-        type: 'doughnut',
+    // 3. Gráfico Inferior 2: Facturación por Marca (Barras reemplazando dona)
+    if (chartFacturacionMarcaRef.current) {
+      chartFacturacionMarcaInst.current?.destroy();
+      chartFacturacionMarcaInst.current = new ChartJS(chartFacturacionMarcaRef.current, {
+        type: 'bar',
         data: {
-          labels: estadoChartData.labels,
+          labels: facturacionMarcaChartData.labels,
           datasets: [
             {
-              data: estadoChartData.data,
-              backgroundColor: estadoChartData.colors,
-              borderWidth: 2,
-              borderColor: '#ffffff',
+              label: 'Facturación por Marca',
+              data: facturacionMarcaChartData.data,
+              backgroundColor: '#0F172A',
+              borderRadius: 6,
+              barThickness: 20,
             },
           ],
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          cutout: '66%',
           plugins: {
-            legend: {
-              position: 'bottom',
-              labels: {
-                boxWidth: 10,
-                padding: 10,
-                font: { family: 'Plus Jakarta Sans', size: 11 },
-              },
-            },
+            legend: { display: false },
             tooltip: {
               callbacks: {
-                label: (ctx) => ` ${ctx.label}: ${ctx.raw} unidades`,
+                label: (ctx) => ` ${ctx.label}: ${formatCurrency(Number(ctx.parsed.y ?? 0))}`,
               },
+            },
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              ticks: { font: { family: 'Plus Jakarta Sans', size: 11, weight: 'bold' } },
+            },
+            y: {
+              beginAtZero: true,
+              grid: { color: '#f1f5f9' },
+              ticks: {
+                callback: (val) => `$${(Number(val) / 1000).toLocaleString()}k`,
+                font: { family: 'Plus Jakarta Sans', size: 10 },
+              },
+              title: { display: true, text: 'Facturación ($)', font: { size: 10 } },
             },
           },
         },
@@ -334,12 +418,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     }
 
     return () => {
-      chartFacturacionPeriodoInst.current?.destroy();
+      chartEvolucionFacturacionInst.current?.destroy();
+      chartTopClientesInst.current?.destroy();
       chartFacturacionMarcaInst.current?.destroy();
-      chartFacturacionClienteInst.current?.destroy();
-      chartNeumaticosEstadoInst.current?.destroy();
     };
-  }, [periodoChartData, marcaChartData, clienteChartData, estadoChartData]);
+  }, [evolucionFacturacionData, topClientesChartData, facturacionMarcaChartData]);
 
   // Summary breakdown by Client for executive review
   const clientBreakdown = useMemo(() => {
@@ -380,19 +463,44 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               <span>Filtros Gerenciales:</span>
             </span>
 
-            {/* Periodo Dropdown */}
-            <select
-              value={periodoFilter}
-              onChange={(e) => setPeriodoFilter(e.target.value)}
-              className="text-xs font-semibold px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-900"
-            >
-              <option value="ALL">Todos los Periodos</option>
-              {periodosList.map((p) => (
-                <option key={p} value={p}>
-                  Año {p}
-                </option>
-              ))}
-            </select>
+            {/* Filtro Multi-Selección de Años */}
+            <div className="flex items-center gap-1.5 flex-wrap p-1 bg-slate-50 border border-slate-200 rounded-lg">
+              <span className="text-[10px] font-bold text-slate-500 uppercase px-1.5">Años:</span>
+              <button
+                type="button"
+                onClick={() => setSelectedYears([])}
+                className={`px-2 py-0.5 text-xs font-bold rounded-md transition-all ${
+                  selectedYears.length === 0
+                    ? 'bg-orange-500 text-slate-950 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                }`}
+              >
+                Todos
+              </button>
+              {periodosList.map((p) => {
+                const isSelected = selectedYears.includes(p);
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => {
+                      setSelectedYears((prev) =>
+                        prev.includes(p) ? prev.filter((y) => y !== p) : [...prev, p]
+                      );
+                    }}
+                    className={`px-2 py-0.5 text-xs font-bold font-mono rounded-md transition-all ${
+                      isSelected
+                        ? 'bg-slate-900 text-white shadow-xs ring-1 ring-orange-500'
+                        : 'text-slate-700 bg-white hover:bg-slate-100 border border-slate-200/80'
+                    }`}
+                    title={`Filtrar por año ${p} (haz clic para alternar)`}
+                  >
+                    {p}
+                    {isSelected && <span className="ml-1 text-orange-400 font-bold">✓</span>}
+                  </button>
+                );
+              })}
+            </div>
 
             {/* Cliente Dropdown */}
             <select
@@ -437,10 +545,10 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
           {/* Clear and Export */}
           <div className="flex items-center gap-2">
-            {(periodoFilter !== 'ALL' || clienteFilter !== 'ALL' || marcaFilter !== 'ALL' || searchTerm) && (
+            {(selectedYears.length > 0 || clienteFilter !== 'ALL' || marcaFilter !== 'ALL' || searchTerm) && (
               <button
                 onClick={() => {
-                  setPeriodoFilter('ALL');
+                  setSelectedYears([]);
                   setClienteFilter('ALL');
                   setMarcaFilter('ALL');
                   setSearchTerm('');
@@ -573,61 +681,64 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
         </div>
       </div>
 
-      {/* 4 Gráficos de Gestión (Chart.js) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Gráfico 1: Facturación por Período */}
-        <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
-              <Briefcase className="w-4 h-4 text-slate-900" />
-              <span>Facturación por Período (Evolución)</span>
-            </h3>
-            <span className="text-[11px] text-slate-400 font-mono">USD</span>
+      {/* SECCIÓN DE GRÁFICOS REDISEÑADA PARA GERENCIA */}
+      <div className="space-y-6">
+        {/* Gráfico Principal Superior (Ocupa todo el ancho): Evolución Mensual de Facturación ($ USD/ARS) */}
+        <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col w-full">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                <Briefcase className="w-4 h-4 text-emerald-600" />
+                <span>Evolución Mensual de Facturación ($ USD/ARS)</span>
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Monto facturado mes a mes (Ene - Dic) con análisis comparativo de crecimiento YoY (Línea naranja {evolucionFacturacionData.currentYear} vs. años anteriores)
+              </p>
+            </div>
+            <div className="flex items-center gap-2 text-xs font-semibold">
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-orange-50 text-orange-700 border border-orange-200">
+                <span className="w-3 h-1 bg-orange-500 rounded-full inline-block"></span>
+                <span>Año {evolucionFacturacionData.currentYear} (Activo)</span>
+              </span>
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-50 text-slate-600 border border-slate-200">
+                <span className="w-3 h-0.5 border-t border-dashed border-slate-400 inline-block"></span>
+                <span>Años Anteriores (YoY)</span>
+              </span>
+            </div>
           </div>
-          <div className="relative h-64 w-full">
-            <canvas ref={chartFacturacionPeriodoRef} />
-          </div>
-        </div>
-
-        {/* Gráfico 2: Facturación por Marca */}
-        <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
-              <Briefcase className="w-4 h-4 text-orange-500" />
-              <span>Facturación por Marca</span>
-            </h3>
-            <span className="text-[11px] text-slate-400">Distribución</span>
-          </div>
-          <div className="relative h-64 w-full">
-            <canvas ref={chartFacturacionMarcaRef} />
-          </div>
-        </div>
-
-        {/* Gráfico 3: Facturación por Cliente */}
-        <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
-              <Building2 className="w-4 h-4 text-orange-500" />
-              <span>Facturación por Cliente</span>
-            </h3>
-            <span className="text-[11px] text-slate-400">Top Facturación</span>
-          </div>
-          <div className="relative h-64 w-full">
-            <canvas ref={chartFacturacionClienteRef} />
+          <div className="relative h-64 sm:h-72 w-full">
+            <canvas ref={chartEvolucionFacturacionRef} />
           </div>
         </div>
 
-        {/* Gráfico 4: Neumáticos por Estado */}
-        <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
-              <Package className="w-4 h-4 text-emerald-600" />
-              <span>Neumáticos por Estado</span>
-            </h3>
-            <span className="text-[11px] text-slate-400">{filteredRecords.length} unid.</span>
+        {/* Gráficos Inferiores (2 Columnas Ocupando el Ancho Inferior) */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* 1. "Top Clientes por Facturación" (Barras horizontales descendentes) */}
+          <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                <Building2 className="w-4 h-4 text-orange-500" />
+                <span>Top Clientes por Facturación</span>
+              </h3>
+              <span className="text-[11px] text-slate-400 font-mono">Ranking Descendente</span>
+            </div>
+            <div className="relative h-64 sm:h-72 w-full">
+              <canvas ref={chartTopClientesRef} />
+            </div>
           </div>
-          <div className="relative h-64 w-full">
-            <canvas ref={chartNeumaticosEstadoRef} />
+
+          {/* 2. "Facturación por Marca" (Gráfico de barras de distribución por marca, reemplazando la dona) */}
+          <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                <Briefcase className="w-4 h-4 text-slate-900" />
+                <span>Facturación por Marca</span>
+              </h3>
+              <span className="text-[11px] text-slate-400 font-mono">Distribución por Fabricante</span>
+            </div>
+            <div className="relative h-64 sm:h-72 w-full">
+              <canvas ref={chartFacturacionMarcaRef} />
+            </div>
           </div>
         </div>
       </div>
