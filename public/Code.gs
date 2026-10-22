@@ -138,6 +138,7 @@ function normalizeHeader(header) {
 
   // 2. Mapeos estándar de columnas operativas
   if (str.indexOf("CLIENTE") !== -1) return "CLIENTE";
+  if (str.indexOf("ENVIO") !== -1 || str.indexOf("ENVÍO") !== -1) return "ENVIO";
   if (str.indexOf("FECHA") !== -1 && str.indexOf("INGRESO") !== -1) return "FECHA_INGRESO";
   if (str.indexOf("REMITO") !== -1 && str.indexOf("INGRESO") !== -1) return "REMITO_INGRESO";
   if (str.indexOf("MARCA") !== -1) return "MARCA";
@@ -150,6 +151,7 @@ function normalizeHeader(header) {
   if (str.indexOf("LOTE") !== -1) return "CANT_LOTE";
   if (str.indexOf("INTERNO") !== -1 || str.indexOf("HOJA DE RUTA") !== -1) return "NRO_INTERNO";
   if (str.indexOf("COTIZACION") !== -1) return "N_COTIZACION";
+  if (str === "FIT" || str.indexOf("INICIO") !== -1 || str.indexOf("F.I.T") !== -1) return "FIT";
   if (str.indexOf("TRABAJO") !== -1) return "TRABAJO_A_REALIZAR";
   if (str.indexOf("ESTADO") !== -1) return "ESTADO";
   if (str.indexOf("COMPROMETIDA") !== -1) return "FECHA_COMPROMETIDA";
@@ -168,11 +170,11 @@ function normalizeHeader(header) {
 }
 
 /**
- * Formatea un objeto Date a M/D/YYYY
+ * Formatea un objeto Date al estándar homogéneo DD/MM/YYYY
  */
 function formatDateString(date) {
-  var m = date.getMonth() + 1;
-  var d = date.getDate();
+  var d = String(date.getDate()).padStart(2, '0');
+  var m = String(date.getMonth() + 1).padStart(2, '0');
   var y = date.getFullYear();
-  return m + "/" + d + "/" + y;
+  return d + "/" + m + "/" + y;
 }

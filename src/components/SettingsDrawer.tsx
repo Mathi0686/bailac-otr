@@ -14,12 +14,15 @@ import {
   Code2,
   ShieldCheck,
   RotateCcw,
+  Calculator,
+  HelpCircle,
 } from 'lucide-react';
 import {
   DEFAULT_APPS_SCRIPT_URL,
   DEFAULT_SPREADSHEET_URL,
   fetchFromAppsScript,
 } from '../services/dataService';
+import { KpiFormulasModal } from './KpiFormulasModal';
 
 interface SettingsDrawerProps {
   isOpen: boolean;
@@ -56,6 +59,7 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
   } | null>(null);
   const [copiedSheetUrl, setCopiedSheetUrl] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [isKpiModalOpen, setIsKpiModalOpen] = useState(false);
 
   // Sync urlInput when currentUrl prop changes
   React.useEffect(() => {
@@ -348,7 +352,37 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
               </button>
             </div>
 
-            {/* 4. Acceso al Código Code.gs */}
+            {/* 4. Glosario de Fórmulas y KPIs */}
+            <div className="p-5 rounded-2xl bg-gradient-to-r from-orange-50 via-amber-50 to-orange-50 border border-orange-200/90 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-orange-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <Calculator className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                    <span>¿Cómo se calculan los KPIs?</span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-orange-200 text-orange-900 font-mono">
+                      v2.0
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-slate-600 mt-0.5">
+                    Glosario de fórmulas matemáticas, condiciones estrictas y reglas por cliente
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsKpiModalOpen(true)}
+                className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-all shadow-sm hover:scale-[1.02] active:scale-[0.98] shrink-0"
+                title="Abrir ventana explicativa con todas las fórmulas de KPIs"
+              >
+                <HelpCircle className="w-3.5 h-3.5 text-orange-400" />
+                <span>Glosario de Fórmulas</span>
+              </button>
+            </div>
+
+            {/* 5. Acceso al Código Code.gs */}
             <div className="p-5 rounded-2xl bg-slate-900 text-white shadow-sm flex items-center justify-between gap-4">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 rounded-xl bg-slate-800 text-orange-400 flex items-center justify-center shrink-0">
@@ -389,6 +423,12 @@ export const SettingsDrawer: React.FC<SettingsDrawerProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Modal Explicativo de Fórmulas de KPIs */}
+      <KpiFormulasModal
+        isOpen={isKpiModalOpen}
+        onClose={() => setIsKpiModalOpen(false)}
+      />
     </div>
   );
 };

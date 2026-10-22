@@ -37,6 +37,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onSuccess }) => {
         {/* Top Industrial Accent Bar */}
         <div className="h-2 w-full bg-gradient-to-r from-orange-500 via-amber-500 to-slate-900" />
 
+        {/* Discrete Version Tag in top right corner */}
+        <div className="absolute top-4 right-4 z-10">
+          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-slate-100 text-slate-600 border border-slate-200">
+            Versión v2.0
+          </span>
+        </div>
+
         <div className="p-8">
           {/* Header Brand */}
           <div className="flex items-center gap-3 mb-6">
@@ -123,7 +130,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onSuccess }) => {
 
         {/* Footer info */}
         <div className="bg-slate-50 px-8 py-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
-          <span>Bailac San Juan & Santa Cruz</span>
+          <span className="font-semibold text-slate-600">Bailac Argentina SRL · Versión v2.0</span>
           <span>Soporte OTR 24/7</span>
         </div>
       </div>

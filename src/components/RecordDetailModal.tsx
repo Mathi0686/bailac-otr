@@ -20,7 +20,7 @@ import {
   Paperclip,
 } from 'lucide-react';
 import { OtrRecord } from '../types';
-import { recalculateRecordMetrics, formatCurrency } from '../services/dataService';
+import { recalculateRecordMetrics, formatCurrency, formatDateDisplay } from '../services/dataService';
 import {
   PRESET_CLIENTES,
   PRESET_MARCAS,
@@ -59,9 +59,10 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
     if (isCreateMode) {
       setIsEditing(true);
       const today = new Date();
-      const todayStr = `${today.getMonth() + 1}/${today.getDate()}/${today.getFullYear()}`;
+      const todayStr = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
       setFormData({
         cliente: 'CERRO VANGUARDIA',
+        envio: '',
         marca: 'BRIDGESTONE',
         medida: '45/65R45',
         serie: '',
@@ -72,6 +73,7 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
         cantLote: '1/1',
         nroInterno: '',
         nCotizacion: '',
+        fit: todayStr,
         trabajoRealizar: 'REPARACION',
         estado: 'PLANTA',
         fechaIngreso: todayStr,
@@ -110,7 +112,7 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
 
   const getTodayString = () => {
     const today = new Date();
-    return `${today.getMonth() + 1}/${today.getDate()}/${today.getFullYear()}`;
+    return `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
   };
 
   const handleFormSubmit = (e: React.FormEvent) => {
@@ -333,6 +335,26 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
                 )}
               </div>
 
+              {/* ENVIO (Lote de Envío) */}
+              <div>
+                <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
+                  Envío (Lote)
+                </label>
+                {isEditing ? (
+                  <input
+                    type="text"
+                    value={formData.envio || ''}
+                    onChange={(e) => handleFieldChange('envio', e.target.value.toUpperCase())}
+                    placeholder="Ej. E1, E2, E3..."
+                    className="w-full px-2.5 py-1.5 text-xs font-mono font-bold bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-900 focus:outline-none"
+                  />
+                ) : (
+                  <span className="inline-block px-2.5 py-1 rounded bg-emerald-50 text-emerald-700 font-mono font-bold text-xs border border-emerald-200">
+                    {formData.envio || '—'}
+                  </span>
+                )}
+              </div>
+
               {/* Marca with Presets */}
               <div>
                 <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">Marca *</label>
@@ -521,6 +543,35 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 rounded-xl bg-slate-50 border border-slate-200">
+              {/* FIT (Fecha Inicio de Trabajo) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] font-bold text-slate-600 uppercase">
+                    FIT (Inicio Trabajo)
+                  </label>
+                  {isEditing && (
+                    <button
+                      type="button"
+                      onClick={() => handleFieldChange('fit', getTodayString())}
+                      className="text-[9px] font-semibold text-orange-600 hover:text-orange-800"
+                    >
+                      Hoy
+                    </button>
+                  )}
+                </div>
+                {isEditing ? (
+                  <input
+                    type="text"
+                    value={formData.fit || ''}
+                    onChange={(e) => handleFieldChange('fit', e.target.value)}
+                    placeholder="DD/MM/AAAA o M/D/YYYY"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono font-bold text-slate-800 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-900 focus:outline-none"
+                  />
+                ) : (
+                  <p className="font-mono font-semibold text-slate-900 text-xs">{formatDateDisplay(formData.fit) || '—'}</p>
+                )}
+              </div>
+
               {/* Trabajo a Realizar with Presets & Quick Chips */}
               <div className="sm:col-span-2">
                 <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
@@ -603,7 +654,7 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-[10px] font-bold text-slate-600 uppercase">
-                    Fecha Ingreso (M/D/YYYY)
+                    Fecha Ingreso
                   </label>
                   {isEditing && (
                     <button
@@ -620,11 +671,11 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
                     type="text"
                     value={formData.fechaIngreso || ''}
                     onChange={(e) => handleFieldChange('fechaIngreso', e.target.value)}
-                    placeholder="Ej. 2/3/2026"
+                    placeholder="DD/MM/AAAA"
                     className="w-full px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-900 focus:outline-none"
                   />
                 ) : (
-                  <p className="font-mono text-slate-800 text-xs">{formData.fechaIngreso || '—'}</p>
+                  <p className="font-mono text-slate-800 text-xs">{formatDateDisplay(formData.fechaIngreso) || '—'}</p>
                 )}
               </div>
 
@@ -656,11 +707,11 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
                     type="text"
                     value={formData.fechaComprometida || ''}
                     onChange={(e) => handleFieldChange('fechaComprometida', e.target.value)}
-                    placeholder="Ej. 6/16/2026"
+                    placeholder="DD/MM/AAAA"
                     className="w-full px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-900 focus:outline-none"
                   />
                 ) : (
-                  <p className="font-mono text-slate-800 text-xs">{formData.fechaComprometida || '—'}</p>
+                  <p className="font-mono text-slate-800 text-xs">{formatDateDisplay(formData.fechaComprometida) || '—'}</p>
                 )}
               </div>
 
@@ -685,11 +736,11 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
                     type="text"
                     value={formData.fechaTT || ''}
                     onChange={(e) => handleFieldChange('fechaTT', e.target.value)}
-                    placeholder="M/D/YYYY (vacío si está en planta)"
+                    placeholder="DD/MM/AAAA (vacío si está en planta)"
                     className="w-full px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-900 focus:outline-none"
                   />
                 ) : (
-                  <p className="font-mono font-semibold text-slate-900 text-xs">{formData.fechaTT || 'En proceso'}</p>
+                  <p className="font-mono font-semibold text-slate-900 text-xs">{formatDateDisplay(formData.fechaTT) || 'En proceso'}</p>
                 )}
               </div>
 
@@ -732,11 +783,11 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
                     type="text"
                     value={formData.fechaRetiro || ''}
                     onChange={(e) => handleFieldChange('fechaRetiro', e.target.value)}
-                    placeholder="Ej. 5/28/2026"
+                    placeholder="DD/MM/AAAA"
                     className="w-full px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-900 focus:outline-none"
                   />
                 ) : (
-                  <p className="font-mono text-slate-800 text-xs">{formData.fechaRetiro || '—'}</p>
+                  <p className="font-mono text-slate-800 text-xs">{formatDateDisplay(formData.fechaRetiro) || '—'}</p>
                 )}
               </div>
             </div>
@@ -842,11 +893,11 @@ export const RecordDetailModal: React.FC<RecordDetailModalProps> = ({
                     type="text"
                     value={formData.fechaFactura || ''}
                     onChange={(e) => handleFieldChange('fechaFactura', e.target.value)}
-                    placeholder="Ej. 6/7/2026"
+                    placeholder="DD/MM/AAAA"
                     className="w-full px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-slate-900 focus:outline-none"
                   />
                 ) : (
-                  <p className="font-mono text-slate-800 text-xs">{formData.fechaFactura || '—'}</p>
+                  <p className="font-mono text-slate-800 text-xs">{formatDateDisplay(formData.fechaFactura) || '—'}</p>
                 )}
               </div>
 

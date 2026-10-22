@@ -28,9 +28,24 @@ import {
   Briefcase,
   PlusCircle,
   TrendingUp,
+  Receipt,
+  FileSpreadsheet,
+  Check,
+  Eye,
+  AlertCircle,
+  Calendar,
+  X,
 } from 'lucide-react';
 import { OtrRecord, FilterState } from '../types';
-import { calculateManagementKPIs, filterRecords, formatCurrency, exportToCsv } from '../services/dataService';
+import {
+  calculateManagementKPIs,
+  filterRecords,
+  formatCurrency,
+  exportToCsv,
+  formatDateDisplay,
+  parseDate,
+} from '../services/dataService';
+import { ExportEnvioModal } from './ExportEnvioModal';
 
 ChartJS.register(
   CategoryScale,
@@ -52,6 +67,7 @@ interface ManagementViewProps {
   records: OtrRecord[];
   onSelectRecord: (record: OtrRecord) => void;
   onOpenCreateRecord?: () => void;
+  onSaveRecord?: (record: OtrRecord) => void;
   tvMode: boolean;
 }
 
@@ -59,13 +75,11 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
   records,
   onSelectRecord,
   onOpenCreateRecord,
+  onSaveRecord,
   tvMode,
 }) => {
-  // Filters
-  const [selectedYears, setSelectedYears] = useState<string[]>([]);
-  const [clienteFilter, setClienteFilter] = useState('ALL');
-  const [marcaFilter, setMarcaFilter] = useState('ALL');
-  const [searchTerm, setSearchTerm] = useState('');
+  // Current calendar year (e.g. 2026)
+  const currentCalendarYear = useMemo(() => new Date().getFullYear().toString(), []);
 
   // Period options extracted from records
   const periodosList = useMemo(() => {
@@ -75,6 +89,60 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
     });
     return Array.from(years).sort().reverse();
   }, [records]);
+
+  // Default year: current calendar year if present in records, otherwise latest available
+  const defaultYear = useMemo(() => {
+    if (periodosList.includes(currentCalendarYear)) return currentCalendarYear;
+    return periodosList[0] || currentCalendarYear;
+  }, [periodosList, currentCalendarYear]);
+
+  // Filters: default selected year is the current calendar year (no "Todos")
+  const [selectedYears, setSelectedYears] = useState<string[]>([currentCalendarYear]);
+
+  // Synchronize if periodosList updates and selectedYears is empty
+  useEffect(() => {
+    if (periodosList.length > 0 && selectedYears.length === 0) {
+      setSelectedYears([defaultYear]);
+    }
+  }, [periodosList, defaultYear, selectedYears.length]);
+
+  const [clienteFilter, setClienteFilter] = useState('ALL');
+  const [marcaFilter, setMarcaFilter] = useState('ALL');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isExportEnvioOpen, setIsExportEnvioOpen] = useState<boolean>(false);
+
+  // Quick invoice inputs for pending module
+  const [invoiceInputs, setInvoiceInputs] = useState<Record<string, string>>({});
+  const [savingInvoiceId, setSavingInvoiceId] = useState<string | null>(null);
+
+  // Dedicated year filter & search for Pendientes de Facturación module
+  const [pendientesYearFilter, setPendientesYearFilter] = useState<string>('SYNC');
+  const [pendientesSearchTerm, setPendientesSearchTerm] = useState<string>('');
+
+  // Effective years for pending invoices
+  const activePendientesYears = useMemo(() => {
+    if (pendientesYearFilter === 'SYNC') {
+      return selectedYears.length > 0 ? selectedYears : [currentCalendarYear];
+    }
+    return [pendientesYearFilter];
+  }, [pendientesYearFilter, selectedYears, currentCalendarYear]);
+
+  // Tooltip state for KPI 5: Pendientes
+  const [showPendientesTooltip, setShowPendientesTooltip] = useState(false);
+  const pendientesTooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handlePendientesMouseEnter = () => {
+    if (pendientesTooltipTimeoutRef.current) {
+      clearTimeout(pendientesTooltipTimeoutRef.current);
+    }
+    setShowPendientesTooltip(true);
+  };
+
+  const handlePendientesMouseLeave = () => {
+    pendientesTooltipTimeoutRef.current = setTimeout(() => {
+      setShowPendientesTooltip(false);
+    }, 200);
+  };
 
   const clientesList = useMemo(() => {
     const set = new Set<string>();
@@ -105,6 +173,9 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
   const filteredRecords = useMemo(() => filterRecords(records, filters), [records, filters]);
   const kpis = useMemo(() => calculateManagementKPIs(filteredRecords), [filteredRecords]);
+  const pendientesRecords = useMemo(() => {
+    return filteredRecords.filter((r) => r.estado === 'PLANTA');
+  }, [filteredRecords]);
 
   // Chart Canvas Refs (Rediseño Gerencial)
   const chartEvolucionFacturacionRef = useRef<HTMLCanvasElement | null>(null);
@@ -295,7 +366,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                   const idx = items[0]?.dataIndex ?? 0;
                   return `${MONTH_FULL[idx] || ''} - Facturación Registrada`;
                 },
-                label: (ctx) => ` ${ctx.dataset.label}: ${formatCurrency(Number(ctx.parsed.y ?? 0))}`,
+                label: (ctx) => {
+                  const idx = ctx.dataIndex;
+                  const dataArr = (ctx.dataset.data as number[]) || [];
+                  const individualVal = Number(ctx.parsed.y ?? 0);
+                  const ytdVal = dataArr.slice(0, idx + 1).reduce((acc, v) => acc + (v || 0), 0);
+                  return ` ${ctx.dataset.label}: ${formatCurrency(individualVal)} | Acumulado YTD: ${formatCurrency(ytdVal)}`;
+                },
               },
             },
           },
@@ -452,6 +529,86 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       .sort((a, b) => b.totalBilled - a.totalBilled);
   }, [filteredRecords]);
 
+  // Módulo de Neumáticos Pendientes de Facturación con filtro por año y reglas por cliente
+  const pendientesFacturacion = useMemo(() => {
+    return records
+      .filter((r) => {
+        // 0. Filtro por Año: evita cargar cientos de pendientes históricos sin facturar de años anteriores
+        const recordYear = r.periodoYear?.toString();
+        if (
+          activePendientesYears.length > 0 &&
+          (!recordYear || !activePendientesYears.includes(recordYear))
+        ) {
+          return false;
+        }
+
+        // Un neumático se considera facturado si tiene cargado el campo FACTURA
+        const fac = (r.factura || '').trim();
+        if (fac !== '' && fac !== '-') return false;
+
+        // Búsqueda opcional en el módulo de pendientes
+        if (pendientesSearchTerm) {
+          const q = pendientesSearchTerm.toLowerCase().trim();
+          const matches =
+            r.serie.toLowerCase().includes(q) ||
+            r.cliente.toLowerCase().includes(q) ||
+            (r.hess && r.hess.toLowerCase().includes(q)) ||
+            (r.solped && r.solped.toLowerCase().includes(q)) ||
+            (r.oc && r.oc.toLowerCase().includes(q)) ||
+            (r.medida && r.medida.toLowerCase().includes(q));
+          if (!matches) return false;
+        }
+
+        const cli = (r.cliente || '').toUpperCase();
+        const hasRetiro = Boolean((r.fechaRetiro || '').trim());
+        const hasHes = Boolean((r.hess || '').trim());
+
+        // 1. Cliente VELADERO: Se incluye únicamente si tiene cargado HES Y FECHA RETIRO
+        if (cli.includes('VELADERO')) {
+          return hasHes && hasRetiro;
+        }
+        // 2. Cliente CERRO VANGUARDIA: Se incluye únicamente si tiene cargada FECHA RETIRO
+        else if (cli.includes('CERRO VANGUARDIA') || cli.includes('VANGUARDIA')) {
+          return hasRetiro;
+        }
+        // 3. Demás Clientes: Regla estándar (sin factura asignada y entregados / terminados en taller)
+        else {
+          return r.estado === 'ENTREGADO' || hasRetiro || Boolean((r.fechaTT || '').trim());
+        }
+      })
+      .sort((a, b) => {
+        const timeA = parseDate(a.fechaRetiro || a.fechaIngreso)?.getTime() ?? 0;
+        const timeB = parseDate(b.fechaRetiro || b.fechaIngreso)?.getTime() ?? 0;
+        return timeB - timeA;
+      });
+  }, [records, activePendientesYears, pendientesSearchTerm]);
+
+  // Manejador de guardado rápido de factura
+  const handleSaveInvoice = (r: OtrRecord) => {
+    const val = (invoiceInputs[r.id] || '').trim();
+    if (!val) {
+      alert('Por favor ingrese el número de factura para guardar.');
+      return;
+    }
+    setSavingInvoiceId(r.id);
+    const today = new Date();
+    const todayStr = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+    const updatedRecord: OtrRecord = {
+      ...r,
+      factura: val,
+      fechaFactura: r.fechaFactura && r.fechaFactura.trim() ? r.fechaFactura : todayStr,
+    };
+    if (onSaveRecord) {
+      onSaveRecord(updatedRecord);
+    }
+    setInvoiceInputs((prev) => {
+      const copy = { ...prev };
+      delete copy[r.id];
+      return copy;
+    });
+    setSavingInvoiceId(null);
+  };
+
   return (
     <div className={`space-y-6 ${tvMode ? 'tv-active' : ''}`}>
       {/* Management Filters Bar (Hidden in TV Mode for clean professional TV view) */}
@@ -463,40 +620,45 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               <span>Filtros Gerenciales:</span>
             </span>
 
-            {/* Filtro Multi-Selección de Años */}
+            {/* Filtro de Años (Sin opción "Todos", Año Actual por defecto) */}
             <div className="flex items-center gap-1.5 flex-wrap p-1 bg-slate-50 border border-slate-200 rounded-lg">
-              <span className="text-[10px] font-bold text-slate-500 uppercase px-1.5">Años:</span>
-              <button
-                type="button"
-                onClick={() => setSelectedYears([])}
-                className={`px-2 py-0.5 text-xs font-bold rounded-md transition-all ${
-                  selectedYears.length === 0
-                    ? 'bg-orange-500 text-slate-950 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-                }`}
-              >
-                Todos
-              </button>
+              <span className="text-[10px] font-bold text-slate-500 uppercase px-1.5">Año:</span>
               {periodosList.map((p) => {
                 const isSelected = selectedYears.includes(p);
+                const isCurrent = p === currentCalendarYear;
                 return (
                   <button
                     key={p}
                     type="button"
                     onClick={() => {
-                      setSelectedYears((prev) =>
-                        prev.includes(p) ? prev.filter((y) => y !== p) : [...prev, p]
-                      );
+                      setSelectedYears((prev) => {
+                        if (prev.includes(p)) {
+                          // Prevent unselecting all (keep at least one year active)
+                          const next = prev.filter((y) => y !== p);
+                          return next.length > 0 ? next : [p];
+                        } else {
+                          return [...prev, p];
+                        }
+                      });
                     }}
-                    className={`px-2 py-0.5 text-xs font-bold font-mono rounded-md transition-all ${
+                    className={`px-2.5 py-1 text-xs font-bold font-mono rounded-md transition-all flex items-center gap-1.5 ${
                       isSelected
                         ? 'bg-slate-900 text-white shadow-xs ring-1 ring-orange-500'
                         : 'text-slate-700 bg-white hover:bg-slate-100 border border-slate-200/80'
                     }`}
-                    title={`Filtrar por año ${p} (haz clic para alternar)`}
+                    title={`Filtrar por año ${p}${isCurrent ? ' (Año Actual)' : ''}`}
                   >
-                    {p}
-                    {isSelected && <span className="ml-1 text-orange-400 font-bold">✓</span>}
+                    <span>{p}</span>
+                    {isCurrent && (
+                      <span
+                        className={`text-[9px] px-1.5 py-0.2 rounded font-semibold ${
+                          isSelected ? 'bg-orange-500/30 text-orange-300' : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        Actual
+                      </span>
+                    )}
+                    {isSelected && <span className="text-orange-400 font-bold">✓</span>}
                   </button>
                 );
               })}
@@ -545,10 +707,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
 
           {/* Clear and Export */}
           <div className="flex items-center gap-2">
-            {(selectedYears.length > 0 || clienteFilter !== 'ALL' || marcaFilter !== 'ALL' || searchTerm) && (
+            {((selectedYears.length !== 1 || selectedYears[0] !== defaultYear) ||
+              clienteFilter !== 'ALL' ||
+              marcaFilter !== 'ALL' ||
+              searchTerm) && (
               <button
                 onClick={() => {
-                  setSelectedYears([]);
+                  setSelectedYears([defaultYear]);
                   setClienteFilter('ALL');
                   setMarcaFilter('ALL');
                   setSearchTerm('');
@@ -571,18 +736,18 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
             )}
 
             <button
-              onClick={() => exportToCsv(filteredRecords, 'bailac_gestion_export.csv')}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors whitespace-nowrap"
-              title="Exportar datos financieros y gerenciales"
+              onClick={() => setIsExportEnvioOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 rounded-lg transition-colors whitespace-nowrap shadow-xs"
+              title="Exportar lote de envío a Excel (.xlsx)"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span>Exportar CSV</span>
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="hidden sm:inline font-bold">Exportar Envío</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* 5 KPIs Superiores Modo Gestión */}
+      {/* 5 KPIs Superiores Modo Gestión con Fórmulas Explicativas */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* KPI 1: Facturación Total */}
         <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
@@ -595,7 +760,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 {formatCurrency(kpis.facturacionTotal)}
               </span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">Suma Columna PRECIO</p>
+            <p className="text-[10px] text-slate-400 font-medium mt-1">Calculado: Suma del campo PRECIO de registros filtrados</p>
           </div>
           <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
             <DollarSign className="w-6 h-6" />
@@ -614,7 +779,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               </span>
               <span className="text-xs font-semibold text-slate-500">unid.</span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">Total registrados</p>
+            <p className="text-[10px] text-slate-400 font-medium mt-1">Calculado: Total unidades registradas en el período</p>
           </div>
           <div className="w-12 h-12 rounded-xl bg-slate-100 text-slate-800 flex items-center justify-center shrink-0">
             <Package className="w-6 h-6" />
@@ -633,7 +798,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
               </span>
               <span className="text-xs font-semibold text-slate-500">servicios</span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">Reparación / Recauchaje</p>
+            <p className="text-[10px] text-slate-400 font-medium mt-1">Calculado: Total servicios (Reparación / Recauchaje / L4-L5)</p>
           </div>
           <div className="w-12 h-12 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center shrink-0">
             <Wrench className="w-6 h-6" />
@@ -654,30 +819,132 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                 ({Math.round((kpis.entregados / Math.max(1, kpis.totalNeumaticos)) * 100)}%)
               </span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">Completados y retirados</p>
+            <p className="text-[10px] text-slate-400 font-medium mt-1">Calculado: Neumáticos con estado ENTREGADO o retiro cliente</p>
           </div>
           <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
             <CheckCircle2 className="w-6 h-6" />
           </div>
         </div>
 
-        {/* KPI 5: Pendientes */}
-        <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+        {/* KPI 5: Pendientes (con Tooltip Interactivo al pasar el cursor) */}
+        <div
+          className="relative p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-between cursor-pointer hover:border-amber-400 hover:shadow-md transition-all group"
+          onMouseEnter={handlePendientesMouseEnter}
+          onMouseLeave={handlePendientesMouseLeave}
+          onClick={() => setShowPendientesTooltip((prev) => !prev)}
+          title="Pasa el mouse o haz clic para ver la lista de neumáticos pendientes"
+        >
           <div>
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Pendientes
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                Pendientes
+              </span>
+              <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold border border-amber-200 flex items-center gap-0.5 shadow-2xs">
+                <Eye className="w-2.5 h-2.5 text-amber-600" /> Hover
+              </span>
+            </div>
             <div className="flex items-baseline gap-1 mt-1">
               <span className={`font-mono font-extrabold text-amber-600 ${tvMode ? 'text-4xl' : 'text-3xl'}`}>
                 {kpis.pendientes}
               </span>
               <span className="text-xs font-semibold text-slate-500">en taller</span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">Por facturar / retirar</p>
+            <p className="text-[10px] text-slate-400 font-medium mt-1">Calculado: Unidades en taller o pendientes de facturación/retiro</p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+          <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform shadow-2xs">
             <Clock className="w-6 h-6" />
           </div>
+
+          {/* Tooltip Emergente al pasar el mouse */}
+          {showPendientesTooltip && (
+            <div
+              className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-slate-900 text-white rounded-2xl shadow-2xl border border-slate-700 p-4 z-50 animate-fadeIn cursor-default text-left"
+              onClick={(e) => e.stopPropagation()}
+              onMouseEnter={handlePendientesMouseEnter}
+              onMouseLeave={handlePendientesMouseLeave}
+            >
+              {/* Top Accent line */}
+              <div className="absolute top-0 left-4 right-4 h-1 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-400 rounded-t-full" />
+
+              <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white tracking-wide">
+                      Neumáticos Pendientes en Taller
+                    </h4>
+                    <p className="text-[10px] text-slate-400">
+                      Unidades activas con estado PLANTA
+                    </p>
+                  </div>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
+                  {pendientesRecords.length} unid.
+                </span>
+              </div>
+
+              {/* List of items */}
+              <div className="mt-2.5 max-h-72 overflow-y-auto space-y-2 pr-1 text-xs">
+                {pendientesRecords.length === 0 ? (
+                  <div className="py-6 text-center text-slate-400 text-xs">
+                    No hay neumáticos pendientes en este período.
+                  </div>
+                ) : (
+                  pendientesRecords.map((r) => (
+                    <div
+                      key={r.id}
+                      onClick={() => {
+                        setShowPendientesTooltip(false);
+                        onSelectRecord(r);
+                      }}
+                      className="p-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-750 border border-slate-700/70 hover:border-amber-500/70 cursor-pointer transition-all group/item shadow-2xs"
+                      title="Haz clic para ver la ficha completa"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-[10px] text-slate-400 font-semibold uppercase">Serie:</span>
+                          <span className="font-mono font-bold text-amber-300 text-xs truncate group-hover/item:text-orange-400">
+                            {r.serie || 'S/N'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 text-[10px] text-slate-300 font-mono shrink-0 bg-slate-900/90 px-1.5 py-0.5 rounded border border-slate-700/60">
+                          <Calendar className="w-2.5 h-2.5 text-amber-400" />
+                          <span>{formatDateDisplay(r.fechaIngreso) || '—'}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 mt-1 text-[11px]">
+                        <div className="truncate">
+                          <span className="text-slate-400 text-[10px]">Cliente: </span>
+                          <span className="font-bold text-white">{r.cliente}</span>
+                        </div>
+                        {r.precio > 0 && (
+                          <span className="text-orange-400 font-mono text-[10px] font-bold shrink-0">
+                            {r.precioFormatted || formatCurrency(r.precio)}
+                          </span>
+                        )}
+                      </div>
+
+                      {r.trabajoRealizar && (
+                        <div className="text-[10px] text-slate-400 mt-1 truncate">
+                          <span>Trabajo: </span>
+                          <span className="text-slate-300 font-medium">{r.trabajoRealizar}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Tooltip Footer */}
+              <div className="mt-2.5 pt-2 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-400">
+                <span>Haz clic en una fila para ver el detalle</span>
+                <span className="font-mono text-amber-400 font-semibold">{pendientesRecords.length} en taller</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -743,6 +1010,205 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
         </div>
       </div>
 
+      {/* Módulo: Neumáticos Pendientes de Facturación */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
+        <div className="p-4 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-orange-500/20 text-orange-400 border border-orange-500/30 flex items-center justify-center shrink-0">
+              <Receipt className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-white tracking-wide">
+                  Neumáticos Pendientes de Facturación
+                </h3>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  {pendientesFacturacion.length} listos
+                </span>
+                <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-medium bg-slate-800 text-slate-300 border border-slate-700">
+                  Año: {activePendientesYears.join(', ')}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Criterios: Veladero (HES + Fecha Retiro), Cerro Vanguardia (Fecha Retiro), Demás (Entregados/Terminados).
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Filtro por Año dedicado para Pendientes de Facturación */}
+            <div className="flex items-center gap-1.5 bg-slate-800/90 border border-slate-700 rounded-lg px-2.5 py-1 text-xs">
+              <Calendar className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+              <span className="text-slate-400 text-[11px] font-medium">Filtrar Año:</span>
+              <select
+                value={pendientesYearFilter}
+                onChange={(e) => setPendientesYearFilter(e.target.value)}
+                className="bg-transparent text-white font-semibold focus:outline-none cursor-pointer text-xs pr-1"
+                title="Filtrar pendientes por año específico para omitir históricos sin facturar"
+              >
+                <option value="SYNC" className="bg-slate-900 text-white">
+                  Sincronizado con Pantalla ({selectedYears.join(', ')})
+                </option>
+                {periodosList.map((y) => (
+                  <option key={y} value={y} className="bg-slate-900 text-white">
+                    Año {y}{y === currentCalendarYear ? ' (Actual)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Buscador rápido de pendientes */}
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={pendientesSearchTerm}
+                onChange={(e) => setPendientesSearchTerm(e.target.value)}
+                placeholder="Buscar serie, cliente..."
+                className="bg-slate-800/90 border border-slate-700 text-white placeholder-slate-400 text-xs rounded-lg pl-8 pr-7 py-1 focus:outline-none focus:ring-1 focus:ring-orange-500 w-44"
+              />
+              {pendientesSearchTerm && (
+                <button
+                  type="button"
+                  onClick={() => setPendientesSearchTerm('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs border-collapse">
+            <thead>
+              <tr className="bg-slate-100 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[11px]">
+                <th className="py-3 px-3.5 whitespace-nowrap">Cliente</th>
+                <th className="py-3 px-3 whitespace-nowrap">Envío</th>
+                <th className="py-3 px-3 whitespace-nowrap">Serie</th>
+                <th className="py-3 px-3 whitespace-nowrap">Medida</th>
+                <th className="py-3 px-3 whitespace-nowrap">Trabajo</th>
+                <th className="py-3 px-3 whitespace-nowrap">SOLPED</th>
+                <th className="py-3 px-3 whitespace-nowrap">HES</th>
+                <th className="py-3 px-3 whitespace-nowrap">O. C.</th>
+                <th className="py-3 px-3 text-center whitespace-nowrap">F. Retiro</th>
+                <th className="py-3 px-3 text-right whitespace-nowrap">Tarifa ($)</th>
+                <th className="py-3 px-3 whitespace-nowrap min-w-[200px]">Cargar N° Factura</th>
+                <th className="py-3 px-3 text-center whitespace-nowrap">Acción</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {pendientesFacturacion.length === 0 ? (
+                <tr>
+                  <td colSpan={12} className="py-10 text-center text-slate-500">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <CheckCircle2 className="w-7 h-7 text-emerald-500" />
+                      <p className="text-xs font-semibold text-slate-700">
+                        Excelente: No hay neumáticos pendientes de facturación para el año {activePendientesYears.join(', ')}.
+                      </p>
+                      <p className="text-[11px] text-slate-400 max-w-md">
+                        {pendientesSearchTerm
+                          ? `No se encontraron resultados para la búsqueda "${pendientesSearchTerm}".`
+                          : 'Todos los neumáticos que cumplen criterios de despacho y validación administrativa ya cuentan con factura registrada en el año seleccionado.'}
+                      </p>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                pendientesFacturacion.map((r) => {
+                  const currentInput = invoiceInputs[r.id] ?? '';
+                  const isSaving = savingInvoiceId === r.id;
+
+                  return (
+                    <tr key={r.id} className="hover:bg-amber-50/40 transition-colors">
+                      <td className="py-2.5 px-3.5 font-bold text-slate-900 whitespace-nowrap">
+                        {r.cliente}
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                          {r.envio || '—'}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 font-mono font-bold text-slate-900 whitespace-nowrap">
+                        {r.serie || '—'}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-slate-600 whitespace-nowrap">
+                        {r.medida || '—'}
+                      </td>
+                      <td className="py-2.5 px-3 font-medium text-slate-800 whitespace-nowrap">
+                        {r.trabajoRealizar}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-slate-600 whitespace-nowrap">
+                        {r.solped || '—'}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-slate-700 font-semibold whitespace-nowrap">
+                        {r.hess ? (
+                          <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200">
+                            {r.hess}
+                          </span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-slate-700 whitespace-nowrap">
+                        {r.oc || '—'}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-center text-slate-800 font-semibold whitespace-nowrap">
+                        {formatDateDisplay(r.fechaRetiro) || '—'}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-right font-bold text-orange-600 whitespace-nowrap">
+                        {r.precioFormatted || formatCurrency(r.precio)}
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            value={currentInput}
+                            onChange={(e) =>
+                              setInvoiceInputs((prev) => ({
+                                ...prev,
+                                [r.id]: e.target.value,
+                              }))
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                handleSaveInvoice(r);
+                              }
+                            }}
+                            placeholder="Ej. B-00124..."
+                            className="w-32 px-2 py-1 text-xs font-mono font-bold bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleSaveInvoice(r)}
+                            disabled={!currentInput.trim() || isSaving}
+                            className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg shadow-xs transition-colors"
+                            title="Guardar factura y completar"
+                          >
+                            <Check className="w-3 h-3" />
+                            <span>Guardar</span>
+                          </button>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                        <button
+                          onClick={() => onSelectRecord(r)}
+                          className="p-1 rounded hover:bg-orange-100 text-slate-500 hover:text-orange-600 transition-colors"
+                          title="Abrir ficha completa del neumático"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* Tabla Resumen Gerencial por Cliente */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
         <div className="p-4 bg-slate-900 text-white flex items-center justify-between">
@@ -804,6 +1270,13 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Modal de Exportación por Lote de Envío a Excel (.xlsx) */}
+      <ExportEnvioModal
+        isOpen={isExportEnvioOpen}
+        onClose={() => setIsExportEnvioOpen(false)}
+        records={filteredRecords}
+      />
     </div>
   );
 };

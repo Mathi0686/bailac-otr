@@ -30,9 +30,11 @@ import {
   PlusCircle,
   Calendar,
   X,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { OtrRecord, FilterState } from '../types';
-import { calculateOperationsKPIs, filterRecords, exportToCsv } from '../services/dataService';
+import { calculateOperationsKPIs, filterRecords, exportToCsv, formatDateDisplay, parseDate } from '../services/dataService';
+import { ExportEnvioModal } from './ExportEnvioModal';
 
 ChartJS.register(
   CategoryScale,
@@ -63,15 +65,8 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
   onOpenCreateRecord,
   tvMode,
 }) => {
-  // Filters
-  const [selectedYears, setSelectedYears] = useState<string[]>([]);
-  const [clienteFilter, setClienteFilter] = useState('ALL');
-  const [marcaFilter, setMarcaFilter] = useState('ALL');
-  const [estadoFilter, setEstadoFilter] = useState('ALL');
-  const [trabajoFilter, setTrabajoFilter] = useState('ALL');
-  const [tableSearchTerm, setTableSearchTerm] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = tvMode ? 10 : 15;
+  // Current calendar year (e.g. 2026)
+  const currentCalendarYear = useMemo(() => new Date().getFullYear().toString(), []);
 
   // Available year periods extracted from records
   const periodosList = useMemo(() => {
@@ -81,6 +76,46 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
     });
     return Array.from(years).sort().reverse();
   }, [records]);
+
+  // Default year: current calendar year if present in records, otherwise latest available year
+  const defaultYear = useMemo(() => {
+    if (periodosList.includes(currentCalendarYear)) return currentCalendarYear;
+    return periodosList[0] || currentCalendarYear;
+  }, [periodosList, currentCalendarYear]);
+
+  // Filters: default selected year is the current calendar year (no "Todos")
+  const [selectedYears, setSelectedYears] = useState<string[]>([currentCalendarYear]);
+
+  // Synchronize if periodosList updates and selectedYears is empty or needs fallback
+  useEffect(() => {
+    if (periodosList.length > 0 && selectedYears.length === 0) {
+      setSelectedYears([defaultYear]);
+    }
+  }, [periodosList, defaultYear, selectedYears.length]);
+
+  const [clienteFilter, setClienteFilter] = useState('ALL');
+  const [marcaFilter, setMarcaFilter] = useState('ALL');
+  const [estadoFilter, setEstadoFilter] = useState('ALL');
+  const [trabajoFilter, setTrabajoFilter] = useState('ALL');
+  const [tableSearchTerm, setTableSearchTerm] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = tvMode ? 10 : 15;
+  const [isExportEnvioOpen, setIsExportEnvioOpen] = useState(false);
+  const [showEnProcesoTooltip, setShowEnProcesoTooltip] = useState(false);
+  const enProcesoTooltipTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleEnProcesoMouseEnter = () => {
+    if (enProcesoTooltipTimeoutRef.current) {
+      clearTimeout(enProcesoTooltipTimeoutRef.current);
+    }
+    setShowEnProcesoTooltip(true);
+  };
+
+  const handleEnProcesoMouseLeave = () => {
+    enProcesoTooltipTimeoutRef.current = setTimeout(() => {
+      setShowEnProcesoTooltip(false);
+    }, 200);
+  };
 
   // Available filter options extracted from dataset
   const clientesList = useMemo(() => {
@@ -127,6 +162,9 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
 
   const filteredRecords = useMemo(() => filterRecords(records, filters), [records, filters]);
   const kpis = useMemo(() => calculateOperationsKPIs(filteredRecords), [filteredRecords]);
+  const enProcesoRecords = useMemo(() => {
+    return filteredRecords.filter((r) => r.estado === 'PLANTA');
+  }, [filteredRecords]);
 
   // Reset page when filter changes
   useEffect(() => {
@@ -362,7 +400,13 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                   const idx = items[0]?.dataIndex ?? 0;
                   return `${MONTH_FULL[idx] || ''} - Trabajos Procesados`;
                 },
-                label: (ctx) => ` ${ctx.dataset.label}: ${ctx.parsed.y} neumáticos`,
+                label: (ctx) => {
+                  const idx = ctx.dataIndex;
+                  const dataArr = (ctx.dataset.data as number[]) || [];
+                  const individualVal = ctx.parsed.y;
+                  const ytdVal = dataArr.slice(0, idx + 1).reduce((acc, v) => acc + (v || 0), 0);
+                  return ` ${ctx.dataset.label}: ${individualVal} uds | Acumulado YTD: ${ytdVal} uds`;
+                },
               },
             },
           },
@@ -526,12 +570,24 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
     };
   }, [evolucionMensualData, tiemposTrabajoChartData, estadoTrabajosActivosData, unidadesPlantaPorClienteData]);
 
+  // Ordenar la tabla operativa de monitoreo por Fecha de Ingreso con los más recientes primero
+  const sortedMonitoringRecords = useMemo(() => {
+    return [...filteredRecords].sort((a, b) => {
+      const timeA = parseDate(a.fechaIngreso)?.getTime() ?? 0;
+      const timeB = parseDate(b.fechaIngreso)?.getTime() ?? 0;
+      if (timeB !== timeA) {
+        return timeB - timeA; // Descendente: más recientes primero
+      }
+      return (b.serie || b.id).localeCompare(a.serie || a.id);
+    });
+  }, [filteredRecords]);
+
   // Pagination for high density table
-  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(sortedMonitoringRecords.length / pageSize));
   const paginatedRecords = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
-    return filteredRecords.slice(start, start + pageSize);
-  }, [filteredRecords, currentPage, pageSize]);
+    return sortedMonitoringRecords.slice(start, start + pageSize);
+  }, [sortedMonitoringRecords, currentPage, pageSize]);
 
   return (
     <div className={`space-y-6 ${tvMode ? 'tv-active' : ''}`}>
@@ -544,40 +600,45 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
               <span>Filtros Operativos:</span>
             </span>
 
-            {/* Filtro Multi-Selección de Años */}
+            {/* Filtro de Años (Sin opción "Todos", Año Actual por defecto) */}
             <div className="flex items-center gap-1.5 flex-wrap p-1 bg-slate-50 border border-slate-200 rounded-lg">
-              <span className="text-[10px] font-bold text-slate-500 uppercase px-1.5">Años:</span>
-              <button
-                type="button"
-                onClick={() => setSelectedYears([])}
-                className={`px-2 py-0.5 text-xs font-bold rounded-md transition-all ${
-                  selectedYears.length === 0
-                    ? 'bg-orange-500 text-slate-950 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-                }`}
-              >
-                Todos
-              </button>
+              <span className="text-[10px] font-bold text-slate-500 uppercase px-1.5">Año:</span>
               {periodosList.map((p) => {
                 const isSelected = selectedYears.includes(p);
+                const isCurrent = p === currentCalendarYear;
                 return (
                   <button
                     key={p}
                     type="button"
                     onClick={() => {
-                      setSelectedYears((prev) =>
-                        prev.includes(p) ? prev.filter((y) => y !== p) : [...prev, p]
-                      );
+                      setSelectedYears((prev) => {
+                        if (prev.includes(p)) {
+                          // Prevent unselecting all (keep at least one year active)
+                          const next = prev.filter((y) => y !== p);
+                          return next.length > 0 ? next : [p];
+                        } else {
+                          return [...prev, p];
+                        }
+                      });
                     }}
-                    className={`px-2 py-0.5 text-xs font-bold font-mono rounded-md transition-all ${
+                    className={`px-2.5 py-1 text-xs font-bold font-mono rounded-md transition-all flex items-center gap-1.5 ${
                       isSelected
                         ? 'bg-slate-900 text-white shadow-xs ring-1 ring-orange-500'
                         : 'text-slate-700 bg-white hover:bg-slate-100 border border-slate-200/80'
                     }`}
-                    title={`Filtrar por año ${p} (haz clic para alternar)`}
+                    title={`Filtrar por año ${p}${isCurrent ? ' (Año Actual)' : ''}`}
                   >
-                    {p}
-                    {isSelected && <span className="ml-1 text-orange-400 font-bold">✓</span>}
+                    <span>{p}</span>
+                    {isCurrent && (
+                      <span
+                        className={`text-[9px] px-1.5 py-0.2 rounded font-semibold ${
+                          isSelected ? 'bg-orange-500/30 text-orange-300' : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        Actual
+                      </span>
+                    )}
+                    {isSelected && <span className="text-orange-400 font-bold">✓</span>}
                   </button>
                 );
               })}
@@ -640,7 +701,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
 
           {/* Action Controls: Add Record & Export */}
           <div className="flex items-center gap-2">
-            {(selectedYears.length > 0 ||
+            {((selectedYears.length !== 1 || selectedYears[0] !== defaultYear) ||
               clienteFilter !== 'ALL' ||
               marcaFilter !== 'ALL' ||
               estadoFilter !== 'ALL' ||
@@ -648,7 +709,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
               tableSearchTerm) && (
               <button
                 onClick={() => {
-                  setSelectedYears([]);
+                  setSelectedYears([defaultYear]);
                   setClienteFilter('ALL');
                   setMarcaFilter('ALL');
                   setEstadoFilter('ALL');
@@ -671,18 +732,18 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
             </button>
 
             <button
-              onClick={() => exportToCsv(filteredRecords, 'bailac_operaciones_export.csv')}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors whitespace-nowrap"
-              title="Exportar registros filtrados a CSV"
+              onClick={() => setIsExportEnvioOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 rounded-lg transition-colors whitespace-nowrap shadow-xs"
+              title="Exportar lote de envío a Excel (.xlsx)"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Exportar CSV</span>
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="hidden sm:inline font-bold">Exportar Envío</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* 4 KPIs Superiores */}
+      {/* 4 KPIs Superiores con Fórmulas Explicativas */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* KPI 1: Días Promedio Proceso */}
         <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
@@ -696,7 +757,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
               </span>
               <span className="text-xs font-semibold text-slate-500">días</span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">Ingreso a Taller TT</p>
+            <p className="text-[10px] text-slate-400 font-medium mt-1">Calculado: FECHA_TT vs FIT (Filtro estricto: requiere FIT)</p>
           </div>
           <div className="w-12 h-12 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center shrink-0">
             <Clock className="w-6 h-6" />
@@ -715,7 +776,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
               </span>
               <span className="text-xs font-semibold text-slate-500">días</span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">Término a Despacho Cliente</p>
+            <p className="text-[10px] text-slate-400 font-medium mt-1">Calculado: FECHA_RETIRO vs FIT (Filtro estricto: requiere ambos)</p>
           </div>
           <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
             <Truck className="w-6 h-6" />
@@ -738,7 +799,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
               </span>
               <span className="text-xs font-semibold text-slate-500">días</span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">Contra fecha comprometida</p>
+            <p className="text-[10px] text-slate-400 font-medium mt-1">Calculado: Fecha Comprometida vs FTT / Término</p>
           </div>
           <div
             className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
@@ -749,12 +810,23 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
           </div>
         </div>
 
-        {/* KPI 4: En Proceso */}
-        <div className="p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+        {/* KPI 4: En Proceso (con Tooltip Interactivo al pasar el cursor) */}
+        <div
+          className="relative p-5 bg-white rounded-xl border border-slate-200 shadow-sm flex items-center justify-between cursor-pointer hover:border-amber-400 hover:shadow-md transition-all group"
+          onMouseEnter={handleEnProcesoMouseEnter}
+          onMouseLeave={handleEnProcesoMouseLeave}
+          onClick={() => setShowEnProcesoTooltip((prev) => !prev)}
+          title="Pasa el mouse o haz clic para ver la lista de neumáticos en proceso"
+        >
           <div>
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              En Proceso (Planta)
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                En Proceso (Planta)
+              </span>
+              <span className="text-[9px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold border border-amber-200 flex items-center gap-0.5 shadow-2xs">
+                <Eye className="w-2.5 h-2.5 text-amber-600" /> Hover
+              </span>
+            </div>
             <div className="flex items-baseline gap-2 mt-1">
               <span className={`font-mono font-extrabold text-orange-600 ${tvMode ? 'text-4xl' : 'text-3xl'}`}>
                 {kpis.enProceso}
@@ -763,11 +835,102 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                 / {kpis.totalOperaciones} total
               </span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">Unidades activas en taller</p>
+            <p className="text-[10px] text-slate-400 font-medium mt-1">Calculado: Total unidades activas con estado PLANTA</p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+          <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform shadow-2xs">
             <Layers className="w-6 h-6" />
           </div>
+
+          {/* Tooltip Emergente al pasar el mouse */}
+          {showEnProcesoTooltip && (
+            <div
+              className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-slate-900 text-white rounded-2xl shadow-2xl border border-slate-700 p-4 z-50 animate-fadeIn cursor-default text-left"
+              onClick={(e) => e.stopPropagation()}
+              onMouseEnter={handleEnProcesoMouseEnter}
+              onMouseLeave={handleEnProcesoMouseLeave}
+            >
+              {/* Top Accent line */}
+              <div className="absolute top-0 left-4 right-4 h-1 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-400 rounded-t-full" />
+
+              <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center">
+                    <Layers className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white tracking-wide">
+                      Neumáticos en Proceso (Planta)
+                    </h4>
+                    <p className="text-[10px] text-slate-400">
+                      Unidades activas pendientes de finalización
+                    </p>
+                  </div>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0">
+                  {enProcesoRecords.length} unid.
+                </span>
+              </div>
+
+              {/* List of items */}
+              <div className="mt-2.5 max-h-72 overflow-y-auto space-y-2 pr-1 text-xs">
+                {enProcesoRecords.length === 0 ? (
+                  <div className="py-6 text-center text-slate-400 text-xs">
+                    No hay neumáticos con estado PLANTA actualmente.
+                  </div>
+                ) : (
+                  enProcesoRecords.map((r) => (
+                    <div
+                      key={r.id}
+                      onClick={() => {
+                        setShowEnProcesoTooltip(false);
+                        onSelectRecord(r);
+                      }}
+                      className="p-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-750 border border-slate-700/70 hover:border-orange-500/70 cursor-pointer transition-all group/item shadow-2xs"
+                      title="Haz clic para ver la ficha completa"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-[10px] text-slate-400 font-semibold uppercase">Serie:</span>
+                          <span className="font-mono font-bold text-amber-300 text-xs truncate group-hover/item:text-orange-400">
+                            {r.serie || 'S/N'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1 text-[10px] text-slate-300 font-mono shrink-0 bg-slate-900/90 px-1.5 py-0.5 rounded border border-slate-700/60">
+                          <Calendar className="w-2.5 h-2.5 text-orange-400" />
+                          <span>{formatDateDisplay(r.fechaIngreso) || '—'}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 mt-1 text-[11px]">
+                        <div className="truncate">
+                          <span className="text-slate-400 text-[10px]">Cliente: </span>
+                          <span className="font-bold text-white">{r.cliente}</span>
+                        </div>
+                        {r.medida && (
+                          <span className="text-slate-400 font-mono text-[10px] shrink-0">
+                            {r.medida}
+                          </span>
+                        )}
+                      </div>
+
+                      {r.trabajoRealizar && (
+                        <div className="text-[10px] text-slate-400 mt-1 truncate">
+                          <span>Trabajo: </span>
+                          <span className="text-slate-300 font-medium">{r.trabajoRealizar}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Tooltip Footer */}
+              <div className="mt-2.5 pt-2 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-400">
+                <span>Haz clic en una fila para ver el detalle</span>
+                <span className="font-mono text-amber-400 font-semibold">{enProcesoRecords.length} en planta</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -856,8 +1019,10 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-bold text-white">Tabla Operativa de Monitoreo</h3>
-              <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-orange-600/30 text-orange-400 border border-orange-500/30">
-                {filteredRecords.length} neumáticos
+              <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-orange-600/30 text-orange-400 border border-orange-500/30 flex items-center gap-1">
+                <span>{sortedMonitoringRecords.length} neumáticos</span>
+                <span className="text-slate-400">·</span>
+                <span className="text-amber-300 font-semibold">Más recientes primero</span>
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
@@ -919,6 +1084,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
             <thead>
               <tr className="bg-slate-100 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[11px]">
                 <th className="py-3 px-3.5 whitespace-nowrap">Cliente</th>
+                <th className="py-3 px-3 whitespace-nowrap">Envío</th>
                 <th className="py-3 px-3 whitespace-nowrap">Serie</th>
                 <th className="py-3 px-3 whitespace-nowrap">Marca</th>
                 <th className="py-3 px-3 whitespace-nowrap">Medida</th>
@@ -927,7 +1093,13 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                 <th className="py-3 px-3 text-right whitespace-nowrap">Días Proc.</th>
                 <th className="py-3 px-3 text-right whitespace-nowrap">Días Ret.</th>
                 <th className="py-3 px-3 text-right whitespace-nowrap">Días Atr.</th>
-                <th className="py-3 px-3 text-center whitespace-nowrap">F. Ingreso</th>
+                <th className="py-3 px-3 text-center whitespace-nowrap">FIT</th>
+                <th className="py-3 px-3 text-center whitespace-nowrap bg-orange-50 text-orange-950 font-bold border-x border-orange-200" title="Ordenado: Más recientes primero">
+                  <div className="flex items-center justify-center gap-1">
+                    <span>F. Ingreso</span>
+                    <span className="text-[10px] text-orange-600 font-extrabold">↓</span>
+                  </div>
+                </th>
                 <th className="py-3 px-3 text-center whitespace-nowrap">F. TT</th>
                 <th className="py-3 px-3 text-center whitespace-nowrap">Docs</th>
                 <th className="py-3 px-3 text-center whitespace-nowrap">Acción</th>
@@ -936,7 +1108,7 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
             <tbody className="divide-y divide-slate-100">
               {paginatedRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="py-12 text-center text-slate-400">
+                  <td colSpan={15} className="py-12 text-center text-slate-400">
                     No se encontraron neumáticos con los criterios de búsqueda actuales.
                   </td>
                 </tr>
@@ -949,6 +1121,11 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                   >
                     <td className="py-2.5 px-3.5 font-semibold text-slate-900 whitespace-nowrap">
                       {r.cliente}
+                    </td>
+                    <td className="py-2.5 px-3 whitespace-nowrap">
+                      <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                        {r.envio || '—'}
+                      </span>
                     </td>
                     <td className="py-2.5 px-3 font-mono font-bold text-slate-900 whitespace-nowrap group-hover:text-orange-600 transition-colors">
                       {r.serie || '—'}
@@ -988,11 +1165,14 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
                     >
                       {r.diasAtraso !== null ? `${r.diasAtraso} d` : '0 d'}
                     </td>
+                    <td className="py-2.5 px-3 font-mono text-center text-slate-700 whitespace-nowrap font-semibold">
+                      {formatDateDisplay(r.fit) || '—'}
+                    </td>
                     <td className="py-2.5 px-3 font-mono text-center text-slate-500 whitespace-nowrap">
-                      {r.fechaIngreso || '—'}
+                      {formatDateDisplay(r.fechaIngreso) || '—'}
                     </td>
                     <td className="py-2.5 px-3 font-mono text-center text-slate-800 font-semibold whitespace-nowrap">
-                      {r.fechaTT || '—'}
+                      {formatDateDisplay(r.fechaTT) || '—'}
                     </td>
                     {/* Document Links Column */}
                     <td
@@ -1068,6 +1248,13 @@ export const OperationsView: React.FC<OperationsViewProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Modal de Exportación por Lote de Envío a Excel (.xlsx) */}
+      <ExportEnvioModal
+        isOpen={isExportEnvioOpen}
+        onClose={() => setIsExportEnvioOpen(false)}
+        records={filteredRecords}
+      />
     </div>
   );
 };

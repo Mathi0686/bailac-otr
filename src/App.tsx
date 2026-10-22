@@ -11,6 +11,7 @@ import { ManagementView } from './components/ManagementView';
 import { AppsScriptModal } from './components/AppsScriptModal';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import { RecordDetailModal } from './components/RecordDetailModal';
+import { GestionPasswordModal } from './components/GestionPasswordModal';
 import { ToastContainer, ToastMessage } from './components/Toast';
 import { OtrRecord } from './types';
 import { RAW_CSV_DATA } from './data/rawCsvData';
@@ -27,6 +28,12 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     return sessionStorage.getItem('bailac_auth') === 'true';
   });
+
+  // Secondary password state for Gestión tab
+  const [isGestionUnlocked, setIsGestionUnlocked] = useState<boolean>(() => {
+    return sessionStorage.getItem('bailac_gestion_auth') === 'true';
+  });
+  const [isGestionPasswordModalOpen, setIsGestionPasswordModalOpen] = useState<boolean>(false);
 
   // Navigation tab
   const [activeTab, setActiveTab] = useState<'operaciones' | 'gestion'>('operaciones');
@@ -199,7 +206,10 @@ export default function App() {
 
   const handleLogout = () => {
     sessionStorage.removeItem('bailac_auth');
+    sessionStorage.removeItem('bailac_gestion_auth');
     setIsAuthenticated(false);
+    setIsGestionUnlocked(false);
+    setActiveTab('operaciones');
   };
 
   return (
@@ -217,7 +227,13 @@ export default function App() {
       {/* Main App Bar */}
       <Header
         activeTab={activeTab}
-        onTabChange={(tab) => setActiveTab(tab)}
+        onTabChange={(tab) => {
+          if (tab === 'gestion' && !isGestionUnlocked) {
+            setIsGestionPasswordModalOpen(true);
+          } else {
+            setActiveTab(tab);
+          }
+        }}
         onRefresh={() => loadData(false)}
         isRefreshing={isRefreshing}
         secondsUntilAutoRefresh={secondsUntilAutoRefresh}
@@ -228,6 +244,7 @@ export default function App() {
         onLogout={handleLogout}
         totalRecordsCount={records.length}
         lastUpdated={lastUpdated}
+        isGestionUnlocked={isGestionUnlocked}
       />
 
       {/* Main Workspace Body */}
@@ -244,10 +261,25 @@ export default function App() {
             records={records}
             onSelectRecord={(r) => setSelectedRecord(r)}
             onOpenCreateRecord={() => setIsCreateRecordModalOpen(true)}
+            onSaveRecord={handleSaveRecord}
             tvMode={tvMode}
           />
         )}
       </main>
+
+      {/* Gestión Password Modal */}
+      <GestionPasswordModal
+        isOpen={isGestionPasswordModalOpen}
+        onSuccess={() => {
+          setIsGestionUnlocked(true);
+          setActiveTab('gestion');
+          setIsGestionPasswordModalOpen(false);
+          addToast('success', 'Módulo de Gestión Desbloqueado', 'Acceso gerencial autorizado.');
+        }}
+        onCancel={() => {
+          setIsGestionPasswordModalOpen(false);
+        }}
+      />
 
       {/* Detail / Edit Inspection Modal */}
       <RecordDetailModal

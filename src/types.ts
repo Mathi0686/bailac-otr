@@ -1,6 +1,7 @@
 export interface OtrRecord {
   id: string;
   cliente: string;
+  envio?: string; // Lote de envío (e.g. E1, E2, E3...)
   fechaIngreso: string;
   remitoIngreso: string;
   marca: string;
@@ -13,6 +14,7 @@ export interface OtrRecord {
   cantLote: string;
   nroInterno: string;
   nCotizacion: string;
+  fit?: string; // Fecha Inicio de Trabajo (FIT)
   trabajoRealizar: string;
   estado: string; // 'ENTREGADO' | 'PLANTA' | 'BAJA'
   fechaComprometida: string;
