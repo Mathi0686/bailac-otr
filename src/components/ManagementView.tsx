@@ -35,6 +35,7 @@ import {
   AlertCircle,
   Calendar,
   X,
+  Loader2,
 } from 'lucide-react';
 import { OtrRecord, FilterState } from '../types';
 import {
@@ -67,7 +68,7 @@ interface ManagementViewProps {
   records: OtrRecord[];
   onSelectRecord: (record: OtrRecord) => void;
   onOpenCreateRecord?: () => void;
-  onSaveRecord?: (record: OtrRecord) => void;
+  onSaveRecord?: (record: OtrRecord, action?: 'create' | 'update' | 'update_invoice') => Promise<boolean>;
   tvMode: boolean;
 }
 
@@ -583,30 +584,34 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
       });
   }, [records, activePendientesYears, pendientesSearchTerm]);
 
-  // Manejador de guardado rápido de factura
-  const handleSaveInvoice = (r: OtrRecord) => {
+  // Manejador de guardado rápido de factura con verificación en Google Sheets
+  const handleSaveInvoice = async (r: OtrRecord) => {
+    if (savingInvoiceId) return;
     const val = (invoiceInputs[r.id] || '').trim();
-    if (!val) {
-      alert('Por favor ingrese el número de factura para guardar.');
-      return;
-    }
+    if (!val) return;
+
     setSavingInvoiceId(r.id);
-    const today = new Date();
-    const todayStr = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
-    const updatedRecord: OtrRecord = {
-      ...r,
-      factura: val,
-      fechaFactura: r.fechaFactura && r.fechaFactura.trim() ? r.fechaFactura : todayStr,
-    };
-    if (onSaveRecord) {
-      onSaveRecord(updatedRecord);
+    try {
+      const today = new Date();
+      const todayStr = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${today.getFullYear()}`;
+      const updatedRecord: OtrRecord = {
+        ...r,
+        factura: val,
+        fechaFactura: r.fechaFactura && r.fechaFactura.trim() ? r.fechaFactura : todayStr,
+      };
+      if (onSaveRecord) {
+        const ok = await onSaveRecord(updatedRecord, 'update_invoice');
+        if (ok) {
+          setInvoiceInputs((prev) => {
+            const copy = { ...prev };
+            delete copy[r.id];
+            return copy;
+          });
+        }
+      }
+    } finally {
+      setSavingInvoiceId(null);
     }
-    setInvoiceInputs((prev) => {
-      const copy = { ...prev };
-      delete copy[r.id];
-      return copy;
-    });
-    setSavingInvoiceId(null);
   };
 
   return (
@@ -1165,6 +1170,7 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                           <input
                             type="text"
                             value={currentInput}
+                            disabled={isSaving}
                             onChange={(e) =>
                               setInvoiceInputs((prev) => ({
                                 ...prev,
@@ -1172,22 +1178,32 @@ export const ManagementView: React.FC<ManagementViewProps> = ({
                               }))
                             }
                             onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
+                              if (e.key === 'Enter' && !savingInvoiceId && currentInput.trim()) {
+                                e.preventDefault();
                                 handleSaveInvoice(r);
                               }
                             }}
                             placeholder="Ej. B-00124..."
-                            className="w-32 px-2 py-1 text-xs font-mono font-bold bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                            className="w-32 px-2 py-1 text-xs font-mono font-bold bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-500"
                           />
                           <button
                             type="button"
                             onClick={() => handleSaveInvoice(r)}
-                            disabled={!currentInput.trim() || isSaving}
-                            className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg shadow-xs transition-colors"
-                            title="Guardar factura y completar"
+                            disabled={!currentInput.trim() || Boolean(savingInvoiceId)}
+                            className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg shadow-xs transition-all whitespace-nowrap"
+                            title="Guardar factura en Google Sheets"
                           >
-                            <Check className="w-3 h-3" />
-                            <span>Guardar</span>
+                            {isSaving ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                                <span>Guardando en Google Sheets...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Check className="w-3 h-3 shrink-0" />
+                                <span>Guardar</span>
+                              </>
+                            )}
                           </button>
                         </div>
                       </td>

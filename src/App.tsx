@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { LoginModal } from './components/LoginModal';
 import { Header } from './components/Header';
 import { OperationsView } from './components/OperationsView';
@@ -12,12 +12,15 @@ import { AppsScriptModal } from './components/AppsScriptModal';
 import { SettingsDrawer } from './components/SettingsDrawer';
 import { RecordDetailModal } from './components/RecordDetailModal';
 import { GestionPasswordModal } from './components/GestionPasswordModal';
+import { SyncFeedbackModal, SyncFeedbackState } from './components/SyncFeedbackModal';
 import { ToastContainer, ToastMessage } from './components/Toast';
 import { OtrRecord } from './types';
 import { RAW_CSV_DATA } from './data/rawCsvData';
 import {
   parseRawCsvToRecords,
   fetchFromAppsScript,
+  syncMutationToAppsScript,
+  SyncMutationAction,
   saveStoredRecords,
   loadStoredRecords,
   DEFAULT_APPS_SCRIPT_URL,
@@ -46,6 +49,22 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [selectedRecord, setSelectedRecord] = useState<OtrRecord | null>(null);
   const [isCreateRecordModalOpen, setIsCreateRecordModalOpen] = useState<boolean>(false);
+
+  // Mandatory Google Sheets write verification feedback modal state
+  const pendingAcknowledgeRef = useRef<(() => void) | null>(null);
+  const [syncFeedback, setSyncFeedback] = useState<SyncFeedbackState>({
+    isOpen: false,
+    type: 'success',
+  });
+
+  const handleCloseSyncFeedback = useCallback(() => {
+    setSyncFeedback((prev) => ({ ...prev, isOpen: false }));
+    if (pendingAcknowledgeRef.current) {
+      const commitLocalChanges = pendingAcknowledgeRef.current;
+      pendingAcknowledgeRef.current = null;
+      commitLocalChanges();
+    }
+  }, []);
 
   // Google Apps Script URL in localStorage with official default fallback
   const [appsScriptUrl, setAppsScriptUrl] = useState<string>(() => {
@@ -168,40 +187,119 @@ export default function App() {
     addToast('info', 'Origen restablecido', 'Se cargaron los datos consolidados locales.');
   };
 
-  // Handler for modifying an existing record or adding a new record
-  const handleSaveRecord = (savedRecord: OtrRecord) => {
-    setRecords((prev) => {
-      const existsIndex = prev.findIndex((r) => r.id === savedRecord.id);
-      let updated: OtrRecord[];
-      if (existsIndex >= 0) {
-        updated = [...prev];
-        updated[existsIndex] = savedRecord;
-        addToast(
-          'success',
-          'Registro Modificado',
-          `Se actualizaron los datos del neumático ${savedRecord.serie || savedRecord.nroInterno || ''}.`
-        );
-      } else {
-        updated = [savedRecord, ...prev];
-        addToast(
-          'success',
-          'Nuevo Registro Agregado',
-          `Se ingresó el neumático ${savedRecord.serie || savedRecord.nroInterno || ''} para ${savedRecord.cliente}.`
-        );
-      }
-      saveStoredRecords(updated);
-      return updated;
-    });
+  // Handler for modifying an existing record, saving an invoice, or adding a new record in Google Sheets
+  const handleSaveRecord = async (
+    savedRecord: OtrRecord,
+    explicitAction?: SyncMutationAction
+  ): Promise<boolean> => {
+    const existsAlready = records.some((r) => r.id === savedRecord.id);
+    const action: SyncMutationAction =
+      explicitAction || (existsAlready ? 'update' : 'create');
+
+    const actionLabels: Record<SyncMutationAction, string> = {
+      create: 'Alta de Neumático',
+      update: 'Edición de Registro',
+      update_invoice: 'Carga de Factura',
+      delete: 'Eliminación de Registro',
+    };
+
+    const summaryParts = [
+      savedRecord.serie
+        ? `Serie ${savedRecord.serie}`
+        : savedRecord.nroInterno
+        ? `Int. ${savedRecord.nroInterno}`
+        : 'Sin serie',
+      savedRecord.cliente,
+      action === 'update_invoice' && savedRecord.factura
+        ? `Factura N° ${savedRecord.factura}`
+        : null,
+    ].filter(Boolean);
+
+    try {
+      const result = await syncMutationToAppsScript(appsScriptUrl, action, savedRecord);
+      const syncedRecord = result.record;
+
+      pendingAcknowledgeRef.current = () => {
+        setRecords((prev) => {
+          const existsIndex = prev.findIndex(
+            (r) => r.id === savedRecord.id || r.id === syncedRecord.id
+          );
+          let updated: OtrRecord[];
+          if (existsIndex >= 0) {
+            updated = [...prev];
+            updated[existsIndex] = syncedRecord;
+          } else {
+            updated = [syncedRecord, ...prev];
+          }
+          saveStoredRecords(updated);
+          return updated;
+        });
+        setLastUpdated(new Date());
+      };
+
+      setSyncFeedback({
+        isOpen: true,
+        type: 'success',
+        actionLabel: actionLabels[action],
+        recordSummary: summaryParts.join(' · '),
+      });
+
+      return true;
+    } catch (err: any) {
+      pendingAcknowledgeRef.current = null;
+      setSyncFeedback({
+        isOpen: true,
+        type: 'error',
+        actionLabel: actionLabels[action],
+        recordSummary: summaryParts.join(' · '),
+        errorDetail:
+          err?.message || 'Error desconocido al intentar sincronizar con Google Sheets.',
+      });
+      return false;
+    }
   };
 
-  // Handler for deleting a record
-  const handleDeleteRecord = (id: string) => {
-    setRecords((prev) => {
-      const updated = prev.filter((r) => r.id !== id);
-      saveStoredRecords(updated);
-      addToast('info', 'Registro Eliminado', 'El neumático ha sido removido de la base de datos.');
-      return updated;
-    });
+  // Handler for deleting a record in Google Sheets
+  const handleDeleteRecord = async (targetRecord: OtrRecord): Promise<boolean> => {
+    const summaryParts = [
+      targetRecord.serie
+        ? `Serie ${targetRecord.serie}`
+        : targetRecord.nroInterno || targetRecord.id,
+      targetRecord.cliente,
+    ].filter(Boolean);
+
+    try {
+      await syncMutationToAppsScript(appsScriptUrl, 'delete', targetRecord);
+
+      pendingAcknowledgeRef.current = () => {
+        setRecords((prev) => {
+          const updated = prev.filter((r) => r.id !== targetRecord.id);
+          saveStoredRecords(updated);
+          return updated;
+        });
+        setLastUpdated(new Date());
+      };
+
+      setSyncFeedback({
+        isOpen: true,
+        type: 'success',
+        actionLabel: 'Eliminación de Registro',
+        recordSummary: summaryParts.join(' · '),
+      });
+
+      return true;
+    } catch (err: any) {
+      pendingAcknowledgeRef.current = null;
+      setSyncFeedback({
+        isOpen: true,
+        type: 'error',
+        actionLabel: 'Eliminación de Registro',
+        recordSummary: summaryParts.join(' · '),
+        errorDetail:
+          err?.message || 'Error desconocido al intentar eliminar en Google Sheets.',
+      });
+      return false;
+    }
   };
 
   const handleLogout = () => {
@@ -332,6 +430,13 @@ export default function App() {
         onResetDefault={handleResetDefault}
         onRefreshData={() => loadData(false)}
         isCustomUrlActive={Boolean(appsScriptUrl && appsScriptUrl.trim() !== '')}
+      />
+
+      {/* Mandatory Google Sheets Sync Verification Modal (Success / Error) */}
+      <SyncFeedbackModal
+        feedback={syncFeedback}
+        onClose={handleCloseSyncFeedback}
+        onOpenCodeModal={() => setIsAppsScriptModalOpen(true)}
       />
 
       {/* Toast Feedback Messages */}

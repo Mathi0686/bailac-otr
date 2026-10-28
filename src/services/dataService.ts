@@ -662,6 +662,192 @@ export async function fetchFromAppsScript(webAppUrl: string): Promise<OtrRecord[
   });
 }
 
+export type SyncMutationAction = 'create' | 'update' | 'update_invoice' | 'delete';
+
+export interface SyncMutationResult {
+  success: boolean;
+  record: OtrRecord;
+  rawResponse?: any;
+}
+
+function extractSheetRowNumber(id?: string): number | null {
+  if (!id) return null;
+  const rowMatch = id.match(/^row-(\d+)$/i);
+  if (rowMatch) return parseInt(rowMatch[1], 10);
+  const asMatch = id.match(/^otr-as-(\d+)-/i);
+  if (asMatch) return parseInt(asMatch[1], 10) + 2;
+  const csvMatch = id.match(/^otr-(\d+)-/i);
+  if (csvMatch) {
+    const num = parseInt(csvMatch[1], 10);
+    // Avoid treating Date.now() timestamps as row numbers
+    if (num > 0 && num < 500000) return num + 1;
+  }
+  return null;
+}
+
+function mapRecordToSheetColumns(record: OtrRecord): Record<string, string | number> {
+  return {
+    CLIENTE: record.cliente || '',
+    ENVIO: record.envio || '',
+    FECHA_INGRESO: record.fechaIngreso || '',
+    REMITO_INGRESO: record.remitoIngreso || '',
+    MARCA: record.marca || '',
+    MEDIDA: record.medida || '',
+    SERIE: record.serie || '',
+    SOLPED: record.solped || '',
+    DISENIO_RECAUCHAJE: record.disenioRecauchaje || '',
+    DISENIO_NEUMATICO: record.disenioNeumatico || '',
+    TIPO: record.tipo || '',
+    CANT_LOTE: record.cantLote || '',
+    NRO_INTERNO: record.nroInterno || '',
+    N_COTIZACION: record.nCotizacion || '',
+    FIT: record.fit || '',
+    TRABAJO_A_REALIZAR: record.trabajoRealizar || '',
+    ESTADO: record.estado || '',
+    FECHA_COMPROMETIDA: record.fechaComprometida || '',
+    FECHA_TT: record.fechaTT || '',
+    CONTROL_ENTREGA: record.controlEntrega || '',
+    REMITO_SALIDA: record.remitoSalida || '',
+    FECHA_RETIRO: record.fechaRetiro || '',
+    PRECIO: record.precio > 0 ? record.precio : '',
+    OC: record.oc || '',
+    FACTURA: record.factura || '',
+    FECHA_FACTURA: record.fechaFactura || '',
+    HESS: record.hess || '',
+    LINK_FACTURA: record.linkFactura || '',
+    LINK_OC: record.linkOc || '',
+    LINK_COTIZACION: record.linkCotizacion || '',
+    LINK_REMITO: record.linkRemito || '',
+  };
+}
+
+function extractAppsScriptHtmlError(rawText: string): string | null {
+  const trimmed = rawText.trim();
+  if (!trimmed.startsWith('<!DOCTYPE') && !trimmed.toLowerCase().includes('<html')) {
+    return null;
+  }
+
+  if (trimmed.includes('Script function not found: doPost')) {
+    return 'Script function not found: doPost — El Web App desplegado en Google Apps Script aún no incluye la función de escritura doPost(e). Abra "Ver Code.gs" para copiar el código actualizado e implementar una nueva versión.';
+  }
+
+  const monoMatch = trimmed.match(/font-family:monospace[^>]*>([\s\S]*?)<\/div>/i);
+  if (monoMatch && monoMatch[1]) {
+    const clean = monoMatch[1].replace(/<[^>]+>/g, '').trim();
+    if (clean) return clean;
+  }
+
+  const errClassMatch = trimmed.match(/class="errorMessage"[^>]*>([\s\S]*?)<\/div>/i);
+  if (errClassMatch && errClassMatch[1]) {
+    const clean = errClassMatch[1].replace(/<[^>]+>/g, '').trim();
+    if (clean) return clean;
+  }
+
+  return 'Google Apps Script devolvió una página HTML de error en lugar de JSON válido. Verifique los permisos ("Cualquier usuario") y que la función doPost(e) esté publicada.';
+}
+
+/**
+ * Envía una operación de creación, actualización, carga de factura o eliminación
+ * hacia el Web App de Google Apps Script y verifica estrictamente la respuesta.
+ */
+export async function syncMutationToAppsScript(
+  webAppUrl: string,
+  action: SyncMutationAction,
+  record: OtrRecord
+): Promise<SyncMutationResult> {
+  const url = (webAppUrl || '').trim();
+  if (!url) {
+    throw new Error(
+      'No hay una URL activa de Google Apps Script configurada. Vincule el endpoint en el Panel de Configuración para guardar en Google Sheets.'
+    );
+  }
+
+  const sheetData = mapRecordToSheetColumns(record);
+  const rowNumber = extractSheetRowNumber(record.id);
+
+  const payload = {
+    action,
+    id: record.id,
+    rowId: record.id,
+    rowNumber,
+    serie: record.serie,
+    cliente: record.cliente,
+    factura: record.factura,
+    fechaFactura: record.fechaFactura,
+    data: sheetData,
+    record: {
+      ...record,
+      ...sheetData,
+    },
+  };
+
+  let response: Response;
+  try {
+    // Usamos text/plain;charset=utf-8 para enviar JSON a Google Apps Script sin bloqueo CORS preflight (OPTIONS)
+    response = await fetch(url, {
+      method: 'POST',
+      mode: 'cors',
+      redirect: 'follow',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (networkErr: any) {
+    throw new Error(
+      `Fallo de red o conexión CORS (${networkErr?.message || 'Sin respuesta del servidor'}). Verifique su conexión a internet y que el Web App esté publicado con acceso para "Cualquier persona".`
+    );
+  }
+
+  const rawText = await response.text();
+  const htmlError = extractAppsScriptHtmlError(rawText);
+
+  if (!response.ok) {
+    throw new Error(
+      htmlError || `Error HTTP ${response.status}: ${response.statusText || rawText.slice(0, 180)}`
+    );
+  }
+
+  if (htmlError) {
+    throw new Error(htmlError);
+  }
+
+  let json: any = null;
+  try {
+    json = JSON.parse(rawText);
+  } catch {
+    throw new Error(
+      `La respuesta del servidor no es un JSON válido: ${rawText.slice(0, 180) || 'Respuesta vacía'}`
+    );
+  }
+
+  if (
+    !json ||
+    json.success === false ||
+    json.status === 'error' ||
+    json.result === 'error' ||
+    Boolean(json.error)
+  ) {
+    const serverMsg =
+      json?.error ||
+      json?.message ||
+      'El script de Google Sheets informó un fallo al procesar el guardado.';
+    throw new Error(String(serverMsg));
+  }
+
+  const syncedId =
+    json.id || (json.rowNumber ? `row-${json.rowNumber}` : record.id);
+
+  return {
+    success: true,
+    record: {
+      ...record,
+      id: String(syncedId),
+    },
+    rawResponse: json,
+  };
+}
+
 /**
  * Exporta un envío seleccionado a formato Excel (.xlsx)
  * con las 7 columnas exactas: MARCA, MEDIDA, SERIE, SOLPED, HES, PRECIO, O. C.

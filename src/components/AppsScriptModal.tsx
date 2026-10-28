@@ -29,7 +29,7 @@ export const AppsScriptModal: React.FC<AppsScriptModalProps> = ({
 
   const codeSnippet = `/**
  * ============================================================================
- * BAILAC OTR - GOOGLE APPS SCRIPT BACKEND (Code.gs)
+ * BAILAC OTR v2.0 - GOOGLE APPS SCRIPT BACKEND (Code.gs) - LECTURA Y ESCRITURA
  * ============================================================================
  */
 
@@ -46,9 +46,140 @@ function doGet(e) {
   }
 }
 
+function doPost(e) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+    if (!e || !e.postData || !e.postData.contents) {
+      throw new Error("No se recibieron datos en la petición POST.");
+    }
+
+    var payload = JSON.parse(e.postData.contents);
+    var action = payload.action || "update";
+    var data = payload.data || payload.record || {};
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheets()[0];
+    var values = sheet.getDataRange().getValues();
+    if (!values || values.length === 0) {
+      throw new Error("La hoja de cálculo no contiene encabezados.");
+    }
+
+    var headers = values[0].map(function(h) { return normalizeHeader(h); });
+
+    // 1. ALTA DE NUEVO REGISTRO
+    if (action === "create") {
+      var newRow = headers.map(function(key) {
+        return key && data[key] !== undefined ? data[key] : "";
+      });
+      sheet.appendRow(newRow);
+      var newRowNum = sheet.getLastRow();
+      return jsonResponse({
+        success: true,
+        action: "create",
+        id: "row-" + newRowNum,
+        rowNumber: newRowNum
+      });
+    }
+
+    // Localizar fila objetivo por rowNumber ("row-X") o por SERIE + CLIENTE
+    var targetRow = findTargetRow(values, headers, payload, data);
+    if (!targetRow || targetRow < 2) {
+      throw new Error("No se encontró el registro en Google Sheets para actualizar.");
+    }
+
+    // 2. ELIMINAR REGISTRO
+    if (action === "delete") {
+      sheet.deleteRow(targetRow);
+      return jsonResponse({
+        success: true,
+        action: "delete",
+        deletedRow: targetRow
+      });
+    }
+
+    // 3. CARGA RÁPIDA DE FACTURA
+    if (action === "update_invoice") {
+      var facIdx = headers.indexOf("FACTURA");
+      var fechaFacIdx = headers.indexOf("FECHA_FACTURA");
+      if (facIdx === -1) {
+        throw new Error("No se encontró la columna FACTURA en la hoja.");
+      }
+      sheet.getRange(targetRow, facIdx + 1).setValue(payload.factura || data.FACTURA || "");
+      if (fechaFacIdx !== -1 && (payload.fechaFactura || data.FECHA_FACTURA)) {
+        sheet.getRange(targetRow, fechaFacIdx + 1).setValue(payload.fechaFactura || data.FECHA_FACTURA);
+      }
+      return jsonResponse({
+        success: true,
+        action: "update_invoice",
+        id: "row-" + targetRow,
+        rowNumber: targetRow
+      });
+    }
+
+    // 4. EDICIÓN COMPLETA DE REGISTRO EXISTENTE
+    var currentRowValues = sheet.getRange(targetRow, 1, 1, headers.length).getValues()[0];
+    var updatedRow = headers.map(function(key, colIdx) {
+      if (key && data[key] !== undefined) {
+        return data[key];
+      }
+      return currentRowValues[colIdx];
+    });
+    sheet.getRange(targetRow, 1, 1, headers.length).setValues([updatedRow]);
+
+    return jsonResponse({
+      success: true,
+      action: "update",
+      id: "row-" + targetRow,
+      rowNumber: targetRow
+    });
+  } catch (error) {
+    return jsonResponse({
+      success: false,
+      error: error.message || error.toString()
+    });
+  } finally {
+    try { lock.releaseLock(); } catch (ignore) {}
+  }
+}
+
+function findTargetRow(values, headers, payload, data) {
+  var rowNum = Number(payload.rowNumber);
+  var serieIdx = headers.indexOf("SERIE");
+  var clienteIdx = headers.indexOf("CLIENTE");
+  var targetSerie = String(payload.serie || data.SERIE || "").trim().toUpperCase();
+
+  // Verificar primero la fila directa si coincide la serie (o si no tenía serie)
+  if (rowNum >= 2 && rowNum <= values.length) {
+    if (!targetSerie || serieIdx === -1) return rowNum;
+    var rowSerie = String(values[rowNum - 1][serieIdx] || "").trim().toUpperCase();
+    if (rowSerie === targetSerie || !rowSerie) return rowNum;
+  }
+
+  // Búsqueda de respaldo por SERIE (+ CLIENTE)
+  if (targetSerie && serieIdx !== -1) {
+    var targetCliente = String(payload.cliente || data.CLIENTE || "").trim().toUpperCase();
+    for (var i = values.length - 1; i >= 1; i--) {
+      var s = String(values[i][serieIdx] || "").trim().toUpperCase();
+      if (s === targetSerie) {
+        if (!targetCliente || clienteIdx === -1) return i + 1;
+        var c = String(values[i][clienteIdx] || "").trim().toUpperCase();
+        if (c === targetCliente) return i + 1;
+      }
+    }
+  }
+
+  return rowNum >= 2 && rowNum <= values.length ? rowNum : null;
+}
+
+function jsonResponse(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
 function getOtrDataJson() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheets()[0]; // Lee la primera hoja consolidada
+  const sheet = ss.getSheets()[0];
   const values = sheet.getDataRange().getValues();
 
   if (!values || values.length <= 1) {
@@ -97,6 +228,7 @@ function normalizeHeader(header) {
   if (!header) return "";
   var str = String(header).trim().toUpperCase();
   if (str.indexOf("CLIENTE") !== -1) return "CLIENTE";
+  if (str.indexOf("ENVIO") !== -1 || str.indexOf("ENVÍO") !== -1) return "ENVIO";
   if (str.indexOf("FECHA") !== -1 && str.indexOf("INGRESO") !== -1) return "FECHA_INGRESO";
   if (str.indexOf("REMITO") !== -1 && str.indexOf("INGRESO") !== -1) return "REMITO_INGRESO";
   if (str.indexOf("MARCA") !== -1) return "MARCA";
@@ -108,19 +240,24 @@ function normalizeHeader(header) {
   if (str.indexOf("TIPO") !== -1) return "TIPO";
   if (str.indexOf("LOTE") !== -1) return "CANT_LOTE";
   if (str.indexOf("INTERNO") !== -1) return "NRO_INTERNO";
-  if (str.indexOf("COTIZACION") !== -1) return "N_COTIZACION";
+  if (str.indexOf("COTIZACION") !== -1 && str.indexOf("LINK") === -1) return "N_COTIZACION";
+  if (str === "FIT" || str === "F.I.T." || (str.indexOf("FECHA") !== -1 && str.indexOf("INICIO") !== -1)) return "FIT";
   if (str.indexOf("TRABAJO") !== -1) return "TRABAJO_A_REALIZAR";
   if (str.indexOf("ESTADO") !== -1) return "ESTADO";
   if (str.indexOf("COMPROMETIDA") !== -1) return "FECHA_COMPROMETIDA";
   if (str.indexOf("TT") !== -1) return "FECHA_TT";
   if (str.indexOf("CONTROL") !== -1) return "CONTROL_ENTREGA";
-  if (str.indexOf("REMITO") !== -1 && str.indexOf("SALIDA") !== -1) return "REMITO_SALIDA";
+  if (str.indexOf("REMITO") !== -1 && str.indexOf("SALIDA") !== -1 && str.indexOf("LINK") === -1) return "REMITO_SALIDA";
   if (str.indexOf("RETIRO") !== -1) return "FECHA_RETIRO";
   if (str.indexOf("PRECIO") !== -1) return "PRECIO";
-  if (str.indexOf("O.") !== -1 || str.indexOf("OC") !== -1) return "OC";
+  if ((str.indexOf("O.") !== -1 || str.indexOf("OC") !== -1) && str.indexOf("LINK") === -1) return "OC";
   if (str.indexOf("FECHA") !== -1 && str.indexOf("FACTURA") !== -1) return "FECHA_FACTURA";
-  if (str.indexOf("FACTURA") !== -1) return "FACTURA";
-  if (str.indexOf("HESS") !== -1) return "HESS";
+  if (str.indexOf("FACTURA") !== -1 && str.indexOf("LINK") === -1) return "FACTURA";
+  if (str.indexOf("HES") !== -1) return "HESS";
+  if (str.indexOf("LINK") !== -1 && str.indexOf("FACTURA") !== -1) return "LINK_FACTURA";
+  if (str.indexOf("LINK") !== -1 && str.indexOf("OC") !== -1) return "LINK_OC";
+  if (str.indexOf("LINK") !== -1 && str.indexOf("COT") !== -1) return "LINK_COTIZACION";
+  if (str.indexOf("LINK") !== -1 && str.indexOf("REMITO") !== -1) return "LINK_REMITO";
   return str.replace(/[^A-Z0-9_]/g, "_");
 }`;
 
